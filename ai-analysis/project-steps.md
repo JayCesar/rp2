@@ -1,8 +1,11 @@
 # Passo a passo do projeto - Rascunho inicial
 
-1. Organizar os dados dos csv em dicionários python
+## Organizar os dados dos csv em dicionários python
+- Usar a biblioteca pandas para ler o .csv e um loop para criar a lista de dicionários.
 
-2. Extrair 'features' da competência 1, como por exemplo:
+## Extrair 'features' da competência 1, como por exemplo:
+
+- *Features*  
   - Erros ortográficos - Grafia incorreta das palavras.
   - Erros de pontuação - Uso inadequado de vírgulas, pontos, etc.
   - Erros de capitalização - Uso incorreto de maiúsculas e minúsculas.
@@ -21,14 +24,25 @@
   - Densidade de advérbios genéricos - Abuso de advérbios vagos (ex - muito, bastante).
   - Modalizadores discursivos - Palavras que indicam opinião ou certeza do autor.
 
-3. Criar conjuntos de dados para Machine Learning usando os dados das features extraídos, que será usado para treinar as IAs
+- Como extrair features
+  - Erros Gramaticais e Ortográficos -> language-tool-python
+  - Análise Estrutural e Sintática -> spaCy
+  - Análise Lexical e de Estilo -> Lógica Customizada + Listas de Palavras
 
-4. Dividir dados para treino, validação e teste - 70/15/15
+## Criar conjuntos de dados para Machine Learning usando os dados das features extraídos, que será usado para treinar as IAs
+- Criar a matriz de features X e o vetor de notas y a partir dos dados extraídos.
 
-5. Regressão Linear
+## Dividir dados para treino, validação e teste - 70/15/15
+- Usar a função train_test_split da biblioteca scikit-learn
 
-6. Tokenizar para Deep Learning
+## Regressão Linear
+- Treinar o modelo baseline com X_treino e y_treino e avaliar seu desempenho inicial na validação
 
-7. LSTM e BERT
+## Tokenizar para Deep Learning
+- Usar Tokenizer do Keras (para LSTM) e BertTokenizer (para BERT) para converter os textos em sequências numéricas
 
-8. Avaliar resultados usando RMSE e QWK
+## LSTM e BERT
+- Construir as arquiteturas, treinar os modelos com os dados tokenizados e avaliá-los na validação
+
+## Avaliar resultados usando RMSE e QWK
+- Aplicar os modelos finalizados no conjunto de teste. Consolidar as métricas em uma tabela comparativa final
