@@ -3,31 +3,31 @@
 ## Organizar os dados dos csv em dicionários python
 - Usar a biblioteca pandas para ler o .csv e um loop para criar a lista de dicionários.
 
-## Extrair 'features' da competência 1, como por exemplo:
+## Extrair 'features' da competência 1
+
+- Ferramentas para extrair features
+  - language-tool-python - Ferramenta para encontrar erros objetivos e violações de regras gramaticais claras (ortografia, concordância, crase, pontuação, etc.).
+  - spaCy - Ferramenta para análises estruturais, que não são necessariamente "erros", mas sim características do texto (comprimento de sentenças, riqueza lexical, análise da sintaxe, etc.).
+  - spaCy + Ajustes Manuais - Os "ajustes manuais" aqui significam a criação de listas de palavras (gírias, conectivos formais, vocabulário erudito, etc.). O spaCy entra mais para processar o texto, e a lógica manual verifica se as palavras do texto estão ou não em suas listas.
 
 - *Features*  
-  - Erros ortográficos - Grafia incorreta das palavras.
-  - Erros de pontuação - Uso inadequado de vírgulas, pontos, etc.
-  - Erros de capitalização - Uso incorreto de maiúsculas e minúsculas.
-  - Análise de sintaxe - Estrutura e organização das frases.
-  - Concordância/Conjugação verbal - Relação correta entre sujeito e verbo.
-  - Concordância Nominal - Acordo entre substantivos, adjetivos, etc.
-  - Voz Impessoal - Uso da 3ª pessoa para manter a formalidade.
-  - Regência Verbal - Relação do verbo com seus complementos (preposições).
-  - Riqueza Lexical - Diversidade do vocabulário.
-  - Repetição - Uso excessivo dos mesmos termos.
-  - Uso de crase - Aplicação correta do acento grave (à).
-  - Uso de coloquialismo/gírias - Presença de linguagem informal.
-  - Comprimento médio das sentenças - Tamanho médio das frases.
-  - Uso de Conectivos Formais - Variedade de palavras de transição.
-  - Vocabulário Abstrato/Erudito - Uso de palavras formais e complexas.
-  - Densidade de advérbios genéricos - Abuso de advérbios vagos (ex - muito, bastante).
-  - Modalizadores discursivos - Palavras que indicam opinião ou certeza do autor.
-
-- Como extrair features
-  - Erros Gramaticais e Ortográficos -> language-tool-python
-  - Análise Estrutural e Sintática -> spaCy
-  - Análise Lexical e de Estilo -> Lógica Customizada + Listas de Palavras
+  - Erros ortográficos: language-tool-python - Detecção de violação de regras.
+  - Erros de pontuação: language-tool-python - Detecção de violação de regras.
+  - Erros de capitalização: language-tool-python - Detecção de violação de regras.
+  - Análise de sintaxe: spaCy - Análise da estrutura e dependências da frase.
+  - Concordância/Conjugação verbal: language-tool-python - Detecção de violação de regras.
+  - Concordância Nominal: language-tool-python - Detecção de violação de regras.
+  - Voz Impessoal: spaCy - Identificação de pronomes de 1ª pessoa.
+  - Regência Verbal: language-tool-python - Detecção de violação de regras.
+  - Riqueza Lexical: spaCy - Cálculo sobre os lemas (forma base) das palavras.
+  - Repetição: spaCy - Contagem da frequência dos lemas.
+  - Uso de crase: language-tool-python - Detecção de violação de regras.
+  - Uso de coloquialismo/gírias: spaCy + Listas Customizadas - Verificação contra uma lista de palavras informais.
+  - Comprimento médio das sentenças: spaCy - Análise estrutural baseada na divisão precisa das sentenças.
+  - Uso de Conectivos Formais: spaCy + Listas Customizadas - Verificação contra uma lista de conectivos.
+  - Vocabulário Abstrato/Erudito: spaCy + Listas Customizadas - Verificação contra uma lista de palavras formais.
+  - Densidade de advérbios genéricos: spaCy + Listas Customizadas - Verificação contra uma lista de advérbios.
+  - Modalizadores discursivos: spaCy + Listas Customizadas - Verificação contra uma lista de modalizadores.
 
 ## Criar conjuntos de dados para Machine Learning usando os dados das features extraídos, que será usado para treinar as IAs
 - Criar a matriz de features X e o vetor de notas y a partir dos dados extraídos.
