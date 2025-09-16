@@ -1,0 +1,54 @@
+Carregando ferramentas...
+Ferramentas carregadas com sucesso!
+Selecionando 10 redações aleatórias do total de 6577...
+Extraindo e coletando dados: 100%|██████████████████████████████████████████████████████████████████████████| 10/10 [00:10<00:00,  1.00s/it]
+
+----------------------------------------
+[ Valores Médios das Features e Notas ]
+----------------------------------------
+  - Erros Ortograficos: 0.90
+  - Riqueza Lexical: 0.55
+  - Comp Medio Sentenca: 25.95
+  - Contagem Coloquialismos: 2.50
+  - Contagem Conectivos Formais: 2.60
+  - Nota C1: 132.00
+  - Nota Final: 664.00
+----------------------------------------
+
+
+
+Carregando ferramentas...
+Ferramentas carregadas com sucesso!
+Selecionando 100 redações aleatórias do total de 6577...
+Extraindo e coletando dados: 100%|████████████████████████████████████████████████████████████████████████| 100/100 [01:57<00:00,  1.18s/it]
+
+----------------------------------------
+[ Valores Médios das Features e Notas ]
+----------------------------------------
+  - Erros Ortograficos: 1.21
+  - Riqueza Lexical: 0.54
+  - Comp Medio Sentenca: 30.21
+  - Contagem Coloquialismos: 2.43
+  - Contagem Conectivos Formais: 3.63
+  - Nota C1: 132.00
+  - Nota Final: 626.80
+----------------------------------------
+
+
+
+Carregando ferramentas...
+Ferramentas carregadas com sucesso!
+Selecionando 1000 redações aleatórias do total de 6577...
+Extraindo e coletando dados: 100%|██████████████████████████████████████████████████████████████████████| 1000/1000 [07:39<00:00,  2.18it/s]
+
+----------------------------------------
+[ Valores Médios das Features e Notas ]
+----------------------------------------
+  - Erros Ortograficos: 1.28
+  - Riqueza Lexical: 0.54
+  - Comp Medio Sentenca: 30.27
+  - Contagem Coloquialismos: 2.51
+  - Contagem Conectivos Formais: 3.53
+  - Nota C1: 132.56
+  - Nota Final: 630.96
+----------------------------------------
