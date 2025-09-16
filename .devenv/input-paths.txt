@@ -1,0 +1,7 @@
+/home/vky/school/USP/jayCesar_rp2/rp2/.devenv/flake.json
+/home/vky/school/USP/jayCesar_rp2/rp2/.devenv.flake.nix
+/home/vky/school/USP/jayCesar_rp2/rp2/.env
+/home/vky/school/USP/jayCesar_rp2/rp2/devenv.local.nix
+/home/vky/school/USP/jayCesar_rp2/rp2/devenv.lock
+/home/vky/school/USP/jayCesar_rp2/rp2/devenv.nix
+/home/vky/school/USP/jayCesar_rp2/rp2/devenv.yaml
