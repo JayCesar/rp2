@@ -3,3 +3,5 @@ numpy
 matplotlib
 language-tool-python
 spacy
+tqdm
+scikit-learn
