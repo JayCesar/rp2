@@ -1,18 +1,18 @@
 Carregando ferramentas...
 Ferramentas carregadas com sucesso!
 Selecionando 10 redações aleatórias do total de 6577...
-Extraindo e coletando dados: 100%|██████████████████████████████████████████████████████████████████████████| 10/10 [00:10<00:00,  1.00s/it]
+Extraindo e coletando dados: 100%|██████████████████████████████████████████████████████████████████████████| 10/10 [00:09<00:00,  1.02it/s]
 
 ----------------------------------------
 [ Valores Médios das Features e Notas ]
 ----------------------------------------
-  - Erros Ortograficos: 0.90
-  - Riqueza Lexical: 0.55
-  - Comp Medio Sentenca: 25.95
-  - Contagem Coloquialismos: 2.50
-  - Contagem Conectivos Formais: 2.60
+  - Erros Ortograficos: 1.10
+  - Riqueza Lexical: 0.53
+  - Comp Medio Sentenca: 27.21
+  - Contagem Coloquialismos: 2.30
+  - Contagem Conectivos Formais: 3.10
   - Nota C1: 132.00
-  - Nota Final: 664.00
+  - Nota Final: 700.00
 ----------------------------------------
 
 
@@ -20,18 +20,18 @@ Extraindo e coletando dados: 100%|███████████████�
 Carregando ferramentas...
 Ferramentas carregadas com sucesso!
 Selecionando 100 redações aleatórias do total de 6577...
-Extraindo e coletando dados: 100%|████████████████████████████████████████████████████████████████████████| 100/100 [01:57<00:00,  1.18s/it]
+Extraindo e coletando dados: 100%|████████████████████████████████████████████████████████████████████████| 100/100 [00:51<00:00,  1.93it/s]
 
 ----------------------------------------
 [ Valores Médios das Features e Notas ]
 ----------------------------------------
-  - Erros Ortograficos: 1.21
+  - Erros Ortograficos: 0.97
   - Riqueza Lexical: 0.54
-  - Comp Medio Sentenca: 30.21
-  - Contagem Coloquialismos: 2.43
-  - Contagem Conectivos Formais: 3.63
-  - Nota C1: 132.00
-  - Nota Final: 626.80
+  - Comp Medio Sentenca: 31.32
+  - Contagem Coloquialismos: 2.27
+  - Contagem Conectivos Formais: 3.80
+  - Nota C1: 122.00
+  - Nota Final: 578.80
 ----------------------------------------
 
 
@@ -39,16 +39,16 @@ Extraindo e coletando dados: 100%|███████████████�
 Carregando ferramentas...
 Ferramentas carregadas com sucesso!
 Selecionando 1000 redações aleatórias do total de 6577...
-Extraindo e coletando dados: 100%|██████████████████████████████████████████████████████████████████████| 1000/1000 [07:39<00:00,  2.18it/s]
+Extraindo e coletando dados: 100%|██████████████████████████████████████████████████████████████████████| 1000/1000 [07:19<00:00,  2.27it/s]
 
 ----------------------------------------
 [ Valores Médios das Features e Notas ]
 ----------------------------------------
-  - Erros Ortograficos: 1.28
-  - Riqueza Lexical: 0.54
-  - Comp Medio Sentenca: 30.27
-  - Contagem Coloquialismos: 2.51
-  - Contagem Conectivos Formais: 3.53
-  - Nota C1: 132.56
-  - Nota Final: 630.96
+  - Erros Ortograficos: 1.25
+  - Riqueza Lexical: 0.53
+  - Comp Medio Sentenca: 30.02
+  - Contagem Coloquialismos: 2.41
+  - Contagem Conectivos Formais: 3.72
+  - Nota C1: 134.20
+  - Nota Final: 637.96
 ----------------------------------------

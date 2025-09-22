@@ -48,6 +48,7 @@ def extrair_features(texto: str) -> dict:
     return features
 
 import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
 from redacao_dict.csv_to_dict import create_redacoes_dict
 from tqdm import tqdm
 
@@ -63,7 +64,7 @@ def run():
         'nota_final': []
     }
 
-    redacoes_qt = 100
+    redacoes_qt = 1000
     redacoes_dict = create_redacoes_dict(redacoes_qt)
 
     for redacao in tqdm(redacoes_dict, desc="Extraindo e coletando dados"):
@@ -75,23 +76,43 @@ def run():
         dados_features['nota_c1'].append(redacao.get('nota_c1', 0))
         dados_features['nota_final'].append(redacao.get('nota_final', 0))
 
-    fig, axs = plt.subplots(2, 4, figsize=(20, 10))
+    # Criamos uma figura vazia
+    fig = plt.figure(figsize=(20, 15))
+    fig.suptitle('Distribuição de Features e Notas das Redações', fontsize=22)
 
-    fig.suptitle('Distribuição de Features e Notas das Redações', fontsize=18)
-    
-    axs_flat = axs.flatten()
+    # Criamos uma grade "invisível" de 3 linhas e 6 colunas para nos dar flexibilidade
+    gs = GridSpec(3, 6, figure=fig)
+
+    # Agora, criamos cada eixo (ax) manualmente, posicionando-o na grade
+    # Linha 1: 2 gráficos centralizados
+    ax1 = fig.add_subplot(gs[0, 1:3]) # Ocupa colunas 1 e 2
+    ax2 = fig.add_subplot(gs[0, 3:5]) # Ocupa colunas 3 e 4
+
+    # Linha 2: 3 gráficos
+    ax3 = fig.add_subplot(gs[1, 0:2]) # Ocupa colunas 0 e 1
+    ax4 = fig.add_subplot(gs[1, 2:4]) # Ocupa colunas 2 e 3
+    ax5 = fig.add_subplot(gs[1, 4:6]) # Ocupa colunas 4 e 5
+
+    # Linha 3: 2 gráficos centralizados
+    ax6 = fig.add_subplot(gs[2, 1:3]) # Ocupa colunas 1 e 2
+    ax7 = fig.add_subplot(gs[2, 3:5]) # Ocupa colunas 3 e 4
+
+    # Criamos uma lista com todos os eixos para facilitar o loop de plotagem
+    axs = [ax1, ax2, ax3, ax4, ax5, ax6, ax7]
     chaves = list(dados_features.keys())
 
+    # O seu loop de plotagem continua quase igual, mas agora usa a lista 'axs'
     for i, chave in enumerate(chaves):
-        ax = axs_flat[i]
+        ax = axs[i]
         
         n, bins, patches = ax.hist(dados_features[chave], bins=20, edgecolor='black', alpha=0.7)
         
-        ax.set_title(chave.replace('_', ' ').title())
+        ax.set_title(chave.replace('_', ' ').title(), fontsize=14)
         ax.set_xlabel('Valor')
         ax.set_ylabel('Frequência')
-        ax.grid(axis='y', alpha=0.75)
+        ax.grid(axis='y', alpha=0.75, linestyle='--')
 
+        # O código para adicionar os rótulos no topo das barras continua o mesmo
         for count, rect in zip(n, patches):
             if count > 0:
                 height = rect.get_height()
@@ -104,11 +125,11 @@ def run():
                     fontsize=8
                 )
     
-    axs_flat[-1].axis('off')
+    # Não precisamos mais do axs_flat[-1].axis('off') porque criamos o número exato de eixos.
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     
-    plt.savefig(f"graficos_{redacoes_qt}.png")
+    plt.savefig(f"graficos_{redacoes_qt}.png", dpi=600)
 
     print("\n" + "-"*40)
     print("[ Valores Médios das Features e Notas ]")
