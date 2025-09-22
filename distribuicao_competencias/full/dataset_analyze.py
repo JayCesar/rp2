@@ -32,18 +32,18 @@ competencias = ['Competência 1', 'Competência 2', 'Competência 3', 'Competên
 for i, competencia in enumerate(competencias):
   ax.bar(x + offsets[i], data_to_plot[competencia], width, label=competencia, color=colors(i))
 
-ax.set_title('Distribuição Comparativa das Notas para as 5 Competências do ENEM', fontsize=18)
-ax.set_ylabel('Frequência (Quantidade de Redações)', fontsize=12)
-ax.set_xlabel('Nota', fontsize=12)
+ax.set_title('Distribuição Comparativa das Notas para as 5 Competências do ENEM', fontsize=24)
+ax.set_ylabel('Frequência (Quantidade de Redações)', fontsize=20)
+ax.set_xlabel('Nota', fontsize=20)
 
 ax.set_xticks(x)
 ax.set_xticklabels(scores)
 
-ax.legend(fontsize=10)
+ax.legend(fontsize=18)
 
 ax.yaxis.grid(True, linestyle='--', alpha=0.7)
 ax.set_axisbelow(True)
 
 fig.tight_layout()
-plt.savefig('distribuicao_competencias.png')
+plt.savefig('distribuicao_competencias.png', dpi=600)
 # plt.show()
