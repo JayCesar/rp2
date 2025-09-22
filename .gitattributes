@@ -1,1 +1,2 @@
+*.pth filter=lfs diff=lfs merge=lfs -text
 generated_datasets/extended_essay-br_preprocessed_for_BLSTM.json filter=lfs diff=lfs merge=lfs -text
