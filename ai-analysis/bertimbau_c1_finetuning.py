@@ -470,7 +470,7 @@ def main():
 
     # Create stratification groups for highly imbalanced data
     # Group similar C1 scores to ensure balanced splits
-    stratify_groups = [min(label // 200, 4) for label in c1_labels]
+    stratify_groups = [max(0, min(4, (label - 1) // 200)) for label in c1_labels]
 
     # Split the data with stratification
     train_essays, val_essays, train_labels, val_labels = train_test_split(
