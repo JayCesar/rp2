@@ -1,3 +1,4 @@
+import concurrent.futures
 import language_tool_python
 import logging
 import pathlib
@@ -10,7 +11,8 @@ import transformers
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-ROW_UPPER_LIMIT = None # Set to None to use all samples
+ROW_UPPER_LIMIT = None  # Set to None to use all samples
+
 
 def essay_line_to_single_utf8_string(essay_line: str):
     """
@@ -25,7 +27,7 @@ def essay_line_to_single_utf8_string(essay_line: str):
     return re.sub(r"\s\s+", " ", " ".join(eval(essay_line)))
 
 
-def essay_metrics(essay, nlp, tool, tokenizer):
+def essay_metrics(essay, essay_c1_score, essay_idx, nlp, tool, tokenizer):
     # Basic text statistics
     doc = nlp(essay)
     word_count = len([token for token in doc if not token.is_punct])
@@ -36,10 +38,9 @@ def essay_metrics(essay, nlp, tool, tokenizer):
             return_tensors="pt",
         )
     )
-    if token_amount > 512:
-        print(
-            f"[WARNING] essay's token count ({token_amount}) exceeds BERT's token limit (essay_token_amount > 512)"
-        )
+
+    if essay_idx % 25 == 0:
+        print(f"[DEBUG] essay_idx: {essay_idx}")
 
     errors = tool.check(essay)
     error_count = {}
@@ -50,18 +51,14 @@ def essay_metrics(essay, nlp, tool, tokenizer):
         else:
             error_count[error_category] = 1
 
-        print(f"{error_category} error: {error}")
-
     total_error_count = 0
-    for key, value in error_count.items():
-        print(f"[DEBUG] {key} error count: {value}")
-
-        total_error_count += value
-    print(f"\n[DEBUG] Total error count: {total_error_count}")
+    for error_count in error_count.values():
+        total_error_count += error_count
 
     return pl.LazyFrame(
         error_count
         | {
+            "c1": essay_c1_score,
             "total_error_count": total_error_count,
             "word_count": word_count,
             "sentence_count": sentence_count,
@@ -80,9 +77,7 @@ def main():
     nlp = spacy.load("pt_core_news_lg")
     tool = language_tool_python.LanguageTool("pt-BR")
 
-    dataset_file_path = (
-        pathlib.Path.cwd() / "database" / "extended_essay-br.csv"
-    )
+    dataset_file_path = pathlib.Path.cwd() / "database" / "extended_essay-br.csv"
     if not dataset_file_path.exists():
         print(
             f"""[ERROR] Dataset file  not found at path {dataset_file_path} the
@@ -100,8 +95,11 @@ def main():
     print("[DEBUG] Model loaded")
 
     relevant_columns = "c1", "essay", "prompt"
+    max_rows = None  # Set to None to use all samples
+    ROW_UPPER_LIMIT = 2**31 - 1
     dataset = (
         pl.scan_csv(dataset_file_path)
+        .head(max_rows if max_rows is not None else ROW_UPPER_LIMIT)
         .select(relevant_columns)
         .drop_nulls()
         .unique()
@@ -118,16 +116,15 @@ def main():
             )
             .alias("essay_as_single_utf8_string")
         )
+        .collect()
     )
-
-    if ROW_UPPER_LIMIT is not None:
-        dataset = dataset.head(ROW_UPPER_LIMIT)
-    dataset = dataset.collect()
 
     dataset_with_languagetool_metrics = pl.concat(
         (
-            essay_metrics(essay, nlp, tool, tokenizer).collect()
-            for essay in dataset["essay_as_single_utf8_string"]
+            essay_metrics(essay, c1, idx, nlp, tool, tokenizer).collect()
+            for idx, (essay, c1) in enumerate(
+                zip(dataset["essay_as_single_utf8_string"], dataset["c1"])
+            )
         ),
         how="diagonal",
     ).with_columns(pl.all().fill_null(strategy="zero"))
@@ -140,8 +137,9 @@ def main():
     bert_model_name_path_suffix = bert_model_huggingface_repo.replace("/", "--")
 
     dataset_with_languagetool_metrics_parquet_file_path = (
-        dataset_file_path_parent / f"dataset_with_languagetool_metrics_{bert_model_name_path_suffix}.parquet"
-        )
+        dataset_file_path_parent
+        / f"dataset_with_languagetool_metrics_{bert_model_name_path_suffix}.parquet"
+    )
     dataset_with_languagetool_metrics.write_parquet(
         dataset_with_languagetool_metrics_parquet_file_path
     )
@@ -150,7 +148,10 @@ def main():
         dataset_with_languagetool_metrics_parquet_file_path,
     )
 
-    dataset_with_languagetool_metrics_csv_file_path = dataset_file_path_parent / f"dataset_with_languagetool_metrics_{bert_model_name_path_suffix}.csv"
+    dataset_with_languagetool_metrics_csv_file_path = (
+        dataset_file_path_parent
+        / f"dataset_with_languagetool_metrics_{bert_model_name_path_suffix}.csv"
+    )
     dataset_with_languagetool_metrics.write_csv(
         dataset_with_languagetool_metrics_csv_file_path
     )
@@ -160,7 +161,8 @@ def main():
     )
 
     dataset_with_languagetool_metrics_json_file_path = (
-        dataset_file_path_parent / f"dataset_with_languagetool_metrics_{bert_model_name_path_suffix}.json"
+        dataset_file_path_parent
+        / f"dataset_with_languagetool_metrics_{bert_model_name_path_suffix}.json"
     )
     dataset_with_languagetool_metrics.write_json(
         dataset_with_languagetool_metrics_json_file_path
