@@ -1,11 +1,14 @@
+import concurrent.futures
 import logging
+import os
 import pathlib
 import re
 import sys
 
 import polars as pl
 import spacy
-from dataset_preprocessing_for_LanguageTool import essay_line_to_single_utf8_string
+
+from .dataset_preprocessing_for_LanguageTool import essay_line_to_single_utf8_string
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -81,7 +84,7 @@ def preprocess_text(text: str) -> str:
 
 def load_and_preprocess_dataset(
     csv_path: str | pathlib.Path, max_samples: int | None = None
-) -> tuple[list[str], list[float]]:
+) -> pl.DataFrame:
     """Load and preprocess the essay dataset.
 
     Args:
@@ -94,11 +97,26 @@ def load_and_preprocess_dataset(
     logger.info(f"Loading and preprocessing dataset from {csv_path}")
     print(f"[DEBUG] Loading and preprocessing dataset from {csv_path}")
 
-    SAMPLE_SIZE_UPPER_BOUND = 2**31 - 1
+    ideal_chunksize = (
+        6577 // os.process_cpu_count() if os.process_cpu_count() is not None else 1
+    )
+    print(f"[DEBUG] ideal_chunksize for parallel processing: {ideal_chunksize}")
+
+    def parallel_preprocess_text(essay_column):
+        with concurrent.futures.ProcessPoolExecutor() as executor:
+            return pl.Series(
+                executor.map(
+                    preprocess_text,
+                    essay_column,
+                    chunksize=ideal_chunksize,
+                )
+            )
+
+    DEFAULT_MAX_SAMPLE_SIZE = 2**31 - 1
     relevant_columns = ["c1", "essay", "prompt"]
     df = (
         pl.scan_csv(csv_path)
-        .head(max_samples if max_samples is not None else SAMPLE_SIZE_UPPER_BOUND)
+        .head(max_samples if max_samples is not None else DEFAULT_MAX_SAMPLE_SIZE)
         .select(relevant_columns)
         .drop_nulls()
         # .filter((pl.col("c1") > 0)) # Remove samples with C1 score of 0, as they are not reliable enough
@@ -106,9 +124,7 @@ def load_and_preprocess_dataset(
         .with_columns(
             pl.col("essay")
             .map_batches(
-                lambda essay_column: pl.Series(
-                    (preprocess_text(essay_line) for essay_line in essay_column)
-                ),
+                parallel_preprocess_text,
                 return_dtype=pl.Utf8,
             )
             .alias("essay_as_single_utf8_string")
