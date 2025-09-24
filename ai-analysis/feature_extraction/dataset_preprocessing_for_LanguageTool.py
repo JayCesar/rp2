@@ -1,17 +1,16 @@
 import concurrent.futures
-import language_tool_python
 import logging
+import os
 import pathlib
-import polars as pl
 import re
+
+import language_tool_python
+import polars as pl
 import spacy
-import transformers
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-ROW_UPPER_LIMIT = None  # Set to None to use all samples
 
 
 def essay_line_to_single_utf8_string(essay_line: str):
@@ -27,42 +26,35 @@ def essay_line_to_single_utf8_string(essay_line: str):
     return re.sub(r"\s\s+", " ", " ".join(eval(essay_line)))
 
 
-def essay_metrics(essay, essay_c1_score, essay_idx, nlp, tool, tokenizer):
+def essay_metrics(essay, essay_c1_score, essay_idx, nlp, tool):
     # Basic text statistics
     doc = nlp(essay)
     word_count = len([token for token in doc if not token.is_punct])
     sentence_count = len(list(doc.sents))
-    token_amount = essay_token_count(
-        tokenizer(
-            essay,
-            return_tensors="pt",
-        )
-    )
 
     if essay_idx % 25 == 0:
         print(f"[DEBUG] essay_idx: {essay_idx}")
 
     errors = tool.check(essay)
-    error_count = {}
+    error_counts = {}
     for error in errors:
         error_category = error.category
-        if error_category in error_count:
-            error_count[error_category] += 1
+        if error_category in error_counts:
+            error_counts[error_category] += 1
         else:
-            error_count[error_category] = 1
+            error_counts[error_category] = 1
 
     total_error_count = 0
-    for error_count in error_count.values():
+    for error_count in error_counts.values():
         total_error_count += error_count
 
     return pl.LazyFrame(
-        error_count
+        error_counts
         | {
             "c1": essay_c1_score,
             "total_error_count": total_error_count,
             "word_count": word_count,
             "sentence_count": sentence_count,
-            "token_count": token_amount,
         }
     )
 
@@ -79,39 +71,38 @@ def main():
 
     dataset_file_path = pathlib.Path.cwd() / "database" / "extended_essay-br.csv"
     if not dataset_file_path.exists():
-        print(
-            f"""[ERROR] Dataset file  not found at path {dataset_file_path} the
-            script must be executed from the project's root directory"""
-        )
+        print(f"""[ERROR] Dataset file  not found at path {dataset_file_path}""")
 
         return
 
-    bert_model_huggingface_repo = "neuralmind/bert-base-portuguese-cased"  # BERTimbau
-    # bert_model_huggingface_repo = "ricardoz/BERTugues-base-portuguese-cased" # BERTugues
+    ideal_chunksize = (
+        6577 // os.process_cpu_count() if os.process_cpu_count() is not None else 1
+    )
+    print(f"[DEBUG] ideal_chunksize for parallel processing: {ideal_chunksize}")
 
-    tokenizer = transformers.AutoTokenizer.from_pretrained(bert_model_huggingface_repo)
-    print("[DEBUG] Tokenizer loaded")
-    model = transformers.AutoModel.from_pretrained(bert_model_huggingface_repo)
-    print("[DEBUG] Model loaded")
+    def parallel_essay_line_to_single_utf8_string(essay_column):
+        with concurrent.futures.ProcessPoolExecutor() as executor:
+            return pl.Series(
+                executor.map(
+                    essay_line_to_single_utf8_string,
+                    essay_column,
+                    chunksize=ideal_chunksize,
+                )
+            )
 
     relevant_columns = "c1", "essay", "prompt"
     max_rows = None  # Set to None to use all samples
-    ROW_UPPER_LIMIT = 2**31 - 1
+    DEFAULT_MAX_SAMPLE_SIZE = 2**31 - 1
     dataset = (
         pl.scan_csv(dataset_file_path)
-        .head(max_rows if max_rows is not None else ROW_UPPER_LIMIT)
+        .head(max_rows if max_rows is not None else DEFAULT_MAX_SAMPLE_SIZE)
         .select(relevant_columns)
         .drop_nulls()
         .unique()
         .with_columns(
             pl.col("essay")
             .map_batches(
-                lambda essay_column: pl.Series(
-                    (
-                        essay_line_to_single_utf8_string(essay_line)
-                        for essay_line in essay_column
-                    )
-                ),
+                parallel_essay_line_to_single_utf8_string,
                 return_dtype=pl.Utf8,
             )
             .alias("essay_as_single_utf8_string")
@@ -119,57 +110,36 @@ def main():
         .collect()
     )
 
-    dataset_with_languagetool_metrics = pl.concat(
-        (
-            essay_metrics(essay, c1, idx, nlp, tool, tokenizer).collect()
-            for idx, (essay, c1) in enumerate(
-                zip(dataset["essay_as_single_utf8_string"], dataset["c1"])
-            )
-        ),
-        how="diagonal",
-    ).with_columns(pl.all().fill_null(strategy="zero"))
+    project_root = pathlib.Path(__file__).parent.parent.parent / "generated_datasets"
+
     print(
-        "\n\n[DEBUG] dataset_with_languagetool_metrics:\n",
-        dataset_with_languagetool_metrics,
+        f"[DEBUG] Writing dataset to {project_root / 'extended_essay-br_preprocessed_for_LanguageTool.parquet'}"
     )
-
-    dataset_file_path_parent = pathlib.Path.cwd() / "generated_datasets"
-    bert_model_name_path_suffix = bert_model_huggingface_repo.replace("/", "--")
-
-    dataset_with_languagetool_metrics_parquet_file_path = (
-        dataset_file_path_parent
-        / f"dataset_with_languagetool_metrics_{bert_model_name_path_suffix}.parquet"
-    )
-    dataset_with_languagetool_metrics.write_parquet(
-        dataset_with_languagetool_metrics_parquet_file_path
+    dataset.write_parquet(
+        project_root / "extended_essay-br_preprocessed_for_LanguageTool.parquet"
     )
     print(
-        "[DEBUG] Metrics written to Parquet file: ",
-        dataset_with_languagetool_metrics_parquet_file_path,
+        f"[DEBUG] Dataset written to {project_root / 'extended_essay-br_preprocessed_for_LanguageTool.parquet'}"
     )
 
-    dataset_with_languagetool_metrics_csv_file_path = (
-        dataset_file_path_parent
-        / f"dataset_with_languagetool_metrics_{bert_model_name_path_suffix}.csv"
+    print(
+        f"[DEBUG] Writing dataset to {project_root / 'extended_essay-br_preprocessed_for_LanguageTool.csv'}"
     )
-    dataset_with_languagetool_metrics.write_csv(
-        dataset_with_languagetool_metrics_csv_file_path
+    dataset.write_csv(
+        project_root / "extended_essay-br_preprocessed_for_LanguageTool.csv"
     )
     print(
-        "[DEBUG] Metrics written to CSV file: ",
-        dataset_with_languagetool_metrics_csv_file_path,
+        f"[DEBUG] Dataset written to {project_root / 'extended_essay-br_preprocessed_for_LanguageTool.csv'}"
     )
 
-    dataset_with_languagetool_metrics_json_file_path = (
-        dataset_file_path_parent
-        / f"dataset_with_languagetool_metrics_{bert_model_name_path_suffix}.json"
+    print(
+        f"[DEBUG] Writing dataset to {project_root / 'extended_essay-br_preprocessed_for_LanguageTool.json'}"
     )
-    dataset_with_languagetool_metrics.write_json(
-        dataset_with_languagetool_metrics_json_file_path
+    dataset.write_json(
+        project_root / "extended_essay-br_preprocessed_for_LanguageTool.json"
     )
     print(
-        "[DEBUG] Metrics written to JSON file: ",
-        dataset_with_languagetool_metrics_json_file_path,
+        f"[DEBUG] Dataset written to {project_root / 'extended_essay-br_preprocessed_for_LanguageTool.json'}"
     )
 
 
