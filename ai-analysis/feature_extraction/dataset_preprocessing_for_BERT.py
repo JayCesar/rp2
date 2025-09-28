@@ -147,12 +147,12 @@ def main():
     print(f"[DEBUG] Dataset loaded with {len(dataset)} samples")
 
     generated_datasets_path = project_root / "generated_datasets"
-    generated_datasets_file_name = "extended_essay-br_preprocessed_for_BERT"
+    generated_datasets_filename = "extended_essay-br_preprocessed_for_BERT"
 
     logger.info(f"Writing preprocessed dataset to {generated_datasets_path}")
     print(f"[DEBUG] Writing preprocessed dataset to {generated_datasets_path}")
     preprocessed_dataset_csv_path = (
-        generated_datasets_path / f"{generated_datasets_file_name}.csv"
+        generated_datasets_path / f"{generated_datasets_filename}.csv"
     )
     dataset.write_csv(preprocessed_dataset_csv_path)
     logger.info(f"Dataset written to CSV file: {preprocessed_dataset_csv_path}")
@@ -161,7 +161,7 @@ def main():
     logger.info(f"Writing preprocessed dataset to {generated_datasets_path}")
     print(f"[DEBUG] Writing preprocessed dataset to {generated_datasets_path}")
     preprocessed_dataset_json_path = (
-        generated_datasets_path / f"{generated_datasets_file_name}.json"
+        generated_datasets_path / f"{generated_datasets_filename}.json"
     )
     dataset.write_json(preprocessed_dataset_json_path)
     logger.info(f"Dataset written to JSON file: {preprocessed_dataset_json_path}")
@@ -170,7 +170,7 @@ def main():
     logger.info(f"Writing preprocessed dataset to {generated_datasets_path}")
     print(f"[DEBUG] Writing preprocessed dataset to {generated_datasets_path}")
     preprocessed_dataset_parquet_path = (
-        generated_datasets_path / f"{generated_datasets_file_name}.parquet"
+        generated_datasets_path / f"{generated_datasets_filename}.parquet"
     )
     dataset.write_parquet(preprocessed_dataset_parquet_path)
     logger.info(f"Dataset written to Parquet file: {preprocessed_dataset_parquet_path}")
