@@ -1,48 +1,26 @@
-import concurrent.futures
-import language_tool_python
-import logging
 import pathlib
-import polars as pl
-import spacy
+import subprocess
+import sys
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+import numpy as np
+import polars as pl
+import transformers
+import utils
+
+logger = utils.logger
 
 ROW_UPPER_LIMIT = None  # Set to None to use all samples
 
+# Configuration
+MODEL_NAME = "neuralmind/bert-base-portuguese-cased"  # BERTimbau
+MAX_LENGTH = 512  # BERT maximum sequence length
+BATCH_SIZE = 28  # Larger batch size for better GPU utilization
+NUM_EPOCHS = 10  # Fewer epochs may prevent overfitting
+LEARNING_RATE = 3.5e-5  # Scaled learning rate for batch size 28
+MAX_SAMPLES = None  # Set to None to use all samples
 
-def essay_metrics(essay, essay_c1_score, essay_idx, nlp, tool):
-    # Basic text statistics
-    doc = nlp(essay)
-    word_count = len([token for token in doc if not token.is_punct])
-    sentence_count = len(list(doc.sents))
-
-    if essay_idx % 25 == 0:
-        print(f"[DEBUG] essay_idx: {essay_idx}")
-
-    errors = tool.check(essay)
-    error_counts = {}
-    for error in errors:
-        error_category = error.category
-        if error_category in error_counts:
-            error_counts[error_category] += 1
-        else:
-            error_counts[error_category] = 1
-
-    total_error_count = 0
-    for error_count in error_counts.values():
-        total_error_count += error_count
-
-    return pl.LazyFrame(
-        error_counts
-        | {
-            "c1": essay_c1_score,
-            "total_error_count": total_error_count,
-            "word_count": word_count,
-            "sentence_count": sentence_count,
-        }
-    )
+project_root = pathlib.Path(__file__).parent.parent.parent
+assert project_root.name == "rp2"
 
 
 def essay_token_count(encoded_essay):
@@ -51,127 +29,104 @@ def essay_token_count(encoded_essay):
     return len(essay_tokens)
 
 
-def main():
-    nlp = spacy.load("pt_core_news_lg")
-    tool = language_tool_python.LanguageTool("pt-BR")
+def vectorize_essay(essay, idx, model, tokenizer):
+    if idx % 10 == 0:
+        logger.info(f"vectorize_essay: essay {idx}")
 
-    dataset_parquet_file_path = (
-        pathlib.Path.cwd()
-        / "generated_datasets"
-        / "extended_essay-br_preprocessed_for_LanguageTool.parquet"
+    tokenized_essay = tokenizer.encode(
+        essay,
+        truncation=True,
+        max_length=MAX_LENGTH,
+        return_tensors="pt",
     )
-    if not dataset_parquet_file_path.exists():
-        print(
-            f"""[ERROR] Dataset file  not found at path {dataset_parquet_file_path}"""
-        )
-        return
 
-    print(f"[DEBUG] Loading dataset from {dataset_parquet_file_path}...")
-    relevant_columns = "c1", "essay_as_single_utf8_string", "prompt"
+    # The vector representation of the [CLS] token is used to represent the
+    # entire essay
+    all_token_vectors = model(tokenized_essay)[0]
+    cls_token_vector = (
+        all_token_vectors[0][0].detach().numpy()
+    )  # [0] for batch, then [0] for CLS token
+
+    return cls_token_vector
+
+
+def load_and_preprocess_dataset(csv_path, model, tokenizer) -> pl.DataFrame:
+    logger.info(f"Loading dataset from {csv_path}...")
+
+    relevant_columns = ["c1", "essay_as_single_utf8_string", "prompt"]
+    DEFAULT_MAX_SAMPLE_SIZE = 2**31 - 1
     dataset = (
-        pl.scan_parquet(dataset_parquet_file_path)
+        pl.scan_csv(csv_path)
         .select(relevant_columns)
+        .head(MAX_SAMPLES if MAX_SAMPLES is not None else DEFAULT_MAX_SAMPLE_SIZE)
         .drop_nulls()
         .unique()
+        .with_columns(
+            pl.col("essay_as_single_utf8_string")
+            .map_batches(
+                lambda essays: pl.Series(
+                    (
+                        vectorize_essay(essay, idx, model, tokenizer)
+                        for idx, essay in enumerate(essays)
+                    )
+                ),
+                return_dtype=pl.Array(pl.Float32, 768),
+            )
+            .alias("essay_vector")
+        )
         .collect()
     )
-    print(f"[DEBUG] dataset loaded:\n{dataset}")
+    logger.info(f"Dataset loaded ({len(dataset)} lines):\n{dataset}")
 
-    def parallel_essay_metrics(essay_as_single_utf8_string_column, c1_column):
-        with concurrent.futures.ProcessPoolExecutor() as executor:
-            futures = (
-                executor.submit(essay_metrics, essay, c1, idx, nlp, tool)
-                for idx, (essay, c1) in enumerate(
-                    zip(essay_as_single_utf8_string_column, c1_column)
-                )
+    return dataset
+
+
+def main():
+    # Initialize model
+    logger.info(f"Loading model from {MODEL_NAME}")
+    model = transformers.AutoModel.from_pretrained(MODEL_NAME, num_labels=1)
+    logger.info("model loaded")
+
+    # Initialize tokenizer
+    logger.info(f"Loading tokenizer from {MODEL_NAME}")
+    tokenizer = transformers.AutoTokenizer.from_pretrained(MODEL_NAME)
+    logger.info("tokenizer loaded")
+
+    csv_dataset_file_path = (
+        project_root
+        / "generated_datasets"
+        / "extended_essay-br_preprocessed_for_BERT.csv"
+    )
+    if not csv_dataset_file_path.exists():
+        logger.error(f"Dataset file  not found at path {csv_dataset_file_path}")
+        logger.info(f"Generating necessary {csv_dataset_file_path} dataset...")
+        try:
+            subprocess.run(
+                [sys.executable, "dataset_preprocessing_for_BERT.py"],
+                check=True,
+                capture_output=True,
+                text=True,
             )
-
-            for future in concurrent.futures.as_completed(futures):
-                yield future.result().collect()
-
-    print(f"Calculating metrics for {len(dataset)} essays...")
-    dataset_with_languagetool_metrics = pl.concat(
-        parallel_essay_metrics(dataset["essay_as_single_utf8_string"], dataset["c1"]),
-        how="diagonal",
-    ).with_columns(pl.all().fill_null(strategy="zero"))
-    print(
-        "\n\n[DEBUG] dataset_with_languagetool_metrics:\n",
-        dataset_with_languagetool_metrics,
-    )
-
-    def parallel_essay_metrics(dataset):
-        with concurrent.futures.ProcessPoolExecutor() as executor:
-            futures = (
-                executor.submit(essay_metrics, essay, c1, idx, nlp, tool)
-                for idx, (essay, c1) in enumerate(
-                    zip(dataset["essay_as_single_utf8_string"], dataset["c1"])
-                )
+            logger.info(
+                f"Successfully generated and saved dataset at path: {csv_dataset_file_path}"
             )
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to generate dataset at {csv_dataset_file_path}: {e}")
+            logger.error(f"Command output: {e.stdout}")
+            logger.error(f"Command error: {e.stderr}")
+            raise
 
-            for future in concurrent.futures.as_completed(futures):
-                yield future.result().collect()
-
-    dataset_with_languagetool_metrics = pl.concat(
-        parallel_essay_metrics(dataset),
-        how="diagonal",
-    ).with_columns(pl.all().fill_null(strategy="zero"))
-    print(
-        "\n\n[DEBUG] dataset_with_languagetool_metrics:\n",
-        dataset_with_languagetool_metrics,
+    dataset_with_vectorized_essays = load_and_preprocess_dataset(
+        csv_dataset_file_path, model, tokenizer
     )
 
-    project_root = pathlib.Path(__file__).parent.parent.parent / "generated_datasets"
-
-    dataset_with_languagetool_metrics_file_path_prefix = (
-        "dataset_with_languagetool_metrics"
-    )
-
-    dataset_with_languagetool_metrics_parquet_file_path = (
-        project_root / f"{dataset_with_languagetool_metrics_file_path_prefix}.parquet"
-    )
-    print(
-        "[DEBUG] Writing dataset to Parquet file: ",
-        dataset_with_languagetool_metrics_parquet_file_path,
-    )
-    dataset_with_languagetool_metrics.write_parquet(
-        dataset_with_languagetool_metrics_parquet_file_path,
-    )
-    print(
-        "[DEBUG] Metrics written to Parquet file: ",
-        dataset_with_languagetool_metrics_parquet_file_path,
-    )
-
-    dataset_with_languagetool_metrics_csv_file_path = (
-        project_root / f"{dataset_with_languagetool_metrics_file_path_prefix}.csv"
-    )
-    print(
-        "[DEBUG] Writing dataset to CSV file: ",
-        dataset_with_languagetool_metrics_csv_file_path,
-    )
-    dataset_with_languagetool_metrics.write_csv(
-        dataset_with_languagetool_metrics_csv_file_path
-    )
-    print(
-        "[DEBUG] Metrics written to CSV file: ",
-        dataset_with_languagetool_metrics_csv_file_path,
-    )
-
-    dataset_with_languagetool_metrics_json_file_path = (
-        project_root / f"{dataset_with_languagetool_metrics_file_path_prefix}.json"
-    )
-    print(
-        "[DEBUG] Writing dataset to JSON file: ",
-        dataset_with_languagetool_metrics_json_file_path,
-    )
-    dataset_with_languagetool_metrics.write_json(
-        dataset_with_languagetool_metrics_json_file_path
-    )
-    print(
-        "[DEBUG] Metrics written to JSON file: ",
-        dataset_with_languagetool_metrics_json_file_path,
+    generated_dataset_extensions = "parquet", "json"
+    utils.save_dataset(
+        dataset_with_vectorized_essays,
+        "extended_essay-br_preprocessed_for_BLSTM",
+        *generated_dataset_extensions,
     )
 
 
 if __name__ == "__main__":
     main()
-
