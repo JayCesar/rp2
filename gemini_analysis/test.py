@@ -31,7 +31,10 @@ if __name__ == "__main__":
     instrucoes = ""
     resposta = generate(input, instrucoes)
 
-    if resposta == "Ok.": print("\n\nEle entendeu.")
+    if resposta == "Ok.": 
+        print("\n\nEle entendeu.")
 
+        input = "Qual foi a última coisa que eu falei para você?"
+        resposta = generate(input, instrucoes)
 
 
