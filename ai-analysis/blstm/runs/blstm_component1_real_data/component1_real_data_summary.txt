@@ -1,0 +1,39 @@
+Component 1 Training with Real Essay Data
+==================================================
+
+Portuguese Specifications Applied:
+- Total de camadas: 3
+- Unidades/Célula: 10/26/21 (approximated with final size 21)
+- Otimizador: Adam (AdamW)
+- Learning Rate: 1.01e-3
+- Dropout rate: 0.164
+- Weight Decay (L2): 4.67e-6
+
+Real Data Statistics:
+- Total essays: 6552
+- Training set: 4586
+- Validation set: 1310
+- Test set: 656
+- Essay vector dimension: 768
+- C1 score range: 0-200
+
+Model Configuration:
+{'input_dim': 768, 'hidden_size': 21, 'num_layers': 3, 'bidirectional': True, 'dropout': 0.164, 'aggregation': 'last', 'mlp_hidden': 64, 'use_layer_norm': False, 'output_range': (0, 200)}
+
+Training Configuration:
+{'epochs': 100, 'batch_size': 32, 'lr': 0.00101, 'weight_decay': 4.67e-06, 'optimizer': 'adamw', 'scheduler': 'plateau', 'plateau_patience': 5, 'plateau_factor': 0.7, 'onecycle_pct_start': 0.1, 'grad_clip_norm': 1.0, 'early_stopping_patience': 100, 'seed': 42, 'device': 'auto', 'use_amp': True, 'amp_dtype': 'bf16', 'compile': False, 'target_scaler': 'none'}
+
+Best Validation Metrics:
+{'loss': 777.2252197265625, 'mae': 19.049001693725586, 'mse': 777.2252197265625, 'rmse': 27.878759384155273, 'r2': 0.26869821548461914, 'kappa': 0.3717045820234175, 'qwk': 0.4304262677403924, 'pearson_corr': 0.5193589925765991, 'step_accuracy': 0.6450381679389313, 'mae_step': 16.18320610687023, 'count': 1310}
+
+Training History (last 10 epochs):
+  Epoch 91: Train Loss=495.055105, Val RMSE=29.32, Val Step Acc=0.611, Time=11.1s
+  Epoch 92: Train Loss=487.129501, Val RMSE=29.36, Val Step Acc=0.610, Time=11.5s
+  Epoch 93: Train Loss=485.669790, Val RMSE=29.36, Val Step Acc=0.608, Time=11.4s
+  Epoch 94: Train Loss=484.588386, Val RMSE=29.34, Val Step Acc=0.607, Time=11.3s
+  Epoch 95: Train Loss=496.827264, Val RMSE=29.31, Val Step Acc=0.610, Time=11.3s
+  Epoch 96: Train Loss=479.119007, Val RMSE=29.37, Val Step Acc=0.608, Time=12.8s
+  Epoch 97: Train Loss=496.477962, Val RMSE=29.38, Val Step Acc=0.606, Time=15.5s
+  Epoch 98: Train Loss=478.664433, Val RMSE=29.33, Val Step Acc=0.609, Time=16.5s
+  Epoch 99: Train Loss=489.796424, Val RMSE=29.35, Val Step Acc=0.608, Time=12.1s
+  Epoch 100: Train Loss=481.018785, Val RMSE=29.32, Val Step Acc=0.607, Time=11.6s

@@ -33,22 +33,20 @@ Metrics:
 - All metrics computed on original 0-200 scale
 """
 
-import argparse
-import json
 import logging
-import math
 import os
 import random
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
-from collections.abc import Callable, Sequence
 
 import numpy as np
+import polars as pl
+import scipy.stats
+import sklearn.metrics
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from torch.cuda.amp import GradScaler, autocast
+from torch.cuda.amp import autocast
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence, pad_sequence
 from torch.utils.data import DataLoader, Dataset, Subset, random_split
 
@@ -198,670 +196,378 @@ class ModelConfigError(Exception):
 def get_device(preference: str = "auto") -> torch.device:
     """Auto-detect or select the best available device."""
     if preference != "auto":
-        device = torch.device(preference)
-        logger.info(f"Using specified device: {device}")
-        return device
+        return torch.device(preference)
 
+    # Check for CUDA
     if torch.cuda.is_available():
         device = torch.device("cuda")
         logger.info(f"Using CUDA device: {torch.cuda.get_device_name()}")
-        logger.info(
-            f"CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB"
-        )
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return device
+
+    # Check for MPS (Apple Silicon)
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         device = torch.device("mps")
-        logger.info("Using Apple Metal Performance Shaders (MPS)")
-    else:
-        device = torch.device("cpu")
-        logger.info("Using CPU")
+        logger.info("Using MPS device")
+        return device
 
-    # Check AMP support
-    if device.type == "cuda":
-        if torch.cuda.get_device_capability(device)[0] >= 8:  # Ampere+
-            logger.info("BFloat16 AMP available (recommended)")
-        else:
-            logger.info("Float16 AMP available")
-
+    # Fallback to CPU
+    device = torch.device("cpu")
+    logger.info("Using CPU")
     return device
 
 
 def set_seed(seed: int) -> None:
-    """Set random seeds for reproducibility."""
+    """Set seeds for reproducible results."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-    # For RNN performance, we don't want full determinism
-    torch.backends.cudnn.deterministic = False
-    torch.backends.cudnn.benchmark = True
-
+    torch.cuda.manual_seed_all(seed)
+    # Make CuDNN deterministic
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     logger.info(f"Random seed set to {seed}")
 
 
-def ensure_dir(path: str | Path) -> None:
+def snap_to_step(score: float, step: int = ScoreConstants.STEP) -> int:
+    """Snap score to nearest step increment for evaluation."""
+    return int(round(score / step) * step)
+
+
+def ensure_dir(path: str | Path) -> Path:
     """Create directory if it doesn't exist."""
-    Path(path).mkdir(parents=True, exist_ok=True)
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
-def safe_float(value: str | int | float, field_name: str) -> float:
-    """Safely convert value to float with informative error message."""
-    try:
-        return float(value)
-    except (ValueError, TypeError) as e:
-        raise ValueError(f"Could not convert {field_name}='{value}' to float: {e}")
+# Comprehensive Metrics Functions (matching BERT script)
+def quadratic_weighted_kappa(y_true, y_pred, labels=None):
+    """Calculate Quadratic Weighted Kappa (QWK) score.
+
+    Args:
+        y_true: True labels
+        y_pred: Predicted labels
+        labels: List of possible labels (optional)
+
+    Returns:
+        QWK score between -1 and 1, where 1 is perfect agreement
+    """
+    if labels is None:
+        labels = sorted(list(set(y_true + y_pred)))
+
+    # Create confusion matrix
+    n_labels = len(labels)
+    label_to_idx = {label: idx for idx, label in enumerate(labels)}
+
+    confusion_matrix = np.zeros((n_labels, n_labels))
+    for true_label, pred_label in zip(y_true, y_pred):
+        true_idx = label_to_idx[true_label]
+        pred_idx = label_to_idx[pred_label]
+        confusion_matrix[true_idx, pred_idx] += 1
+
+    # Normalize to get observed agreement matrix
+    total = confusion_matrix.sum()
+    if total == 0:
+        return 0.0
+
+    observed_matrix = confusion_matrix / total
+
+    # Calculate expected agreement matrix
+    row_marginals = confusion_matrix.sum(axis=1) / total
+    col_marginals = confusion_matrix.sum(axis=0) / total
+    expected_matrix = np.outer(row_marginals, col_marginals)
+
+    # Create quadratic weight matrix
+    weights = np.zeros((n_labels, n_labels))
+    for i in range(n_labels):
+        for j in range(n_labels):
+            weights[i, j] = (i - j) ** 2 / (n_labels - 1) ** 2
+
+    # Calculate weighted agreements
+    observed_agreement = np.sum(weights * observed_matrix)
+    expected_agreement = np.sum(weights * expected_matrix)
+
+    # Calculate QWK
+    if expected_agreement == 0:
+        return 0.0
+
+    qwk = 1 - (observed_agreement / expected_agreement)
+    return qwk
 
 
-def snap_to_step(
-    x: float,
-    step: int = ScoreConstants.STEP,
-    min_val: int = ScoreConstants.MIN,
-    max_val: int = ScoreConstants.MAX,
-) -> int:
-    """Round to nearest step and clamp to valid range."""
-    snapped = round(x / step) * step
-    return max(min_val, min(max_val, int(snapped)))
+def round_to_c1_levels(scores):
+    """Round scores to nearest valid C1 levels (0, 40, 80, 120, 160, 200)"""
+    c1_levels = [0, 40, 80, 120, 160, 200]
+    rounded = []
+    for score in scores:
+        # Clamp to valid range first
+        score = max(0, min(200, score))
+        # Find closest C1 level
+        closest_level = min(c1_levels, key=lambda x: abs(x - score))
+        rounded.append(closest_level)
+    return rounded
 
 
-# Target scaling utilities
+# Target scaling
 class TargetScaler:
-    """Scale targets for improved training stability."""
+    """Simple target scaler with different modes."""
 
-    def __init__(self, mode: str = "minmax") -> None:
-        self.mode: str = mode
-        self.fitted: bool = False
-        self.mean_: float | None = None
-        self.std_: float | None = None
-        self.min_: float | None = None
-        self.max_: float | None = None
+    def __init__(self, mode: Literal["none", "minmax", "standard"] = "minmax"):
+        self.mode = mode
+        self.fitted = False
+        self.min_val = None
+        self.max_val = None
+        self.mean_val = None
+        self.std_val = None
 
-    def fit(self, y: np.ndarray) -> "TargetScaler":
-        """Fit scaler to target values."""
-
+    def fit(self, targets: np.ndarray) -> "TargetScaler":
+        """Fit the scaler to target values."""
         if self.mode == "minmax":
-            self.min_ = float(ScoreConstants.MIN)
-            self.max_ = float(ScoreConstants.MAX)
+            self.min_val = targets.min()
+            self.max_val = targets.max()
         elif self.mode == "standard":
-            y = np.array(y)
-
-            self.mean_ = float(np.mean(y))
-            self.std_ = float(np.std(y))
-            if self.std_ == 0:
-                self.std_ = 1.0  # Avoid division by zero
-        elif self.mode == "none":
-            pass
-        else:
-            raise ValueError(f"Unknown scaling mode: {self.mode}")
+            self.mean_val = targets.mean()
+            self.std_val = targets.std()
 
         self.fitted = True
         return self
 
-    def transform(self, y: np.ndarray) -> np.ndarray:
+    def transform(self, targets: np.ndarray) -> np.ndarray:
         """Transform targets using fitted scaler."""
-        if not self.fitted:
+        if not self.fitted and self.mode != "none":
             raise ValueError("Scaler must be fitted before transform")
 
-        y = np.array(y, dtype=np.float32)
-
-        if self.mode == "minmax":
-            return (y - self.min_) / (self.max_ - self.min_)
+        if self.mode == "none":
+            return targets
+        elif self.mode == "minmax":
+            return (targets - self.min_val) / (self.max_val - self.min_val + 1e-8)
         elif self.mode == "standard":
-            return (y - self.mean_) / self.std_
-        elif self.mode == "none":
-            return y
-        else:
-            raise ValueError(f"Unknown scaling mode: {self.mode}")
+            return (targets - self.mean_val) / (self.std_val + 1e-8)
 
-    def inverse_transform(self, y_scaled: np.ndarray) -> np.ndarray:
-        """Inverse transform scaled targets back to original scale."""
-        if not self.fitted:
+        return targets
+
+    def inverse_transform(self, targets: np.ndarray) -> np.ndarray:
+        """Inverse transform targets to original scale."""
+        if not self.fitted and self.mode != "none":
             raise ValueError("Scaler must be fitted before inverse_transform")
 
-        y_scaled = np.array(y_scaled, dtype=np.float32)
-
-        if self.mode == "minmax":
-            return y_scaled * (self.max_ - self.min_) + self.min_
+        if self.mode == "none":
+            return targets
+        elif self.mode == "minmax":
+            return targets * (self.max_val - self.min_val) + self.min_val
         elif self.mode == "standard":
-            return y_scaled * self.std_ + self.mean_
-        elif self.mode == "none":
-            return y_scaled
-        else:
-            raise ValueError(f"Unknown scaling mode: {self.mode}")
+            return targets * self.std_val + self.mean_val
 
-    def state_dict(self) -> dict[str, str | bool | float | None]:
-        """Return state dictionary for serialization."""
+        return targets
+
+    def state_dict(self) -> dict[str, any]:
+        """Get state dictionary for serialization."""
         return {
             "mode": self.mode,
             "fitted": self.fitted,
-            "mean_": self.mean_,
-            "std_": self.std_,
-            "min_": self.min_,
-            "max_": self.max_,
+            "min_val": self.min_val,
+            "max_val": self.max_val,
+            "mean_val": self.mean_val,
+            "std_val": self.std_val,
         }
 
-    def load_state_dict(self, state_dict: dict[str, str | bool | float | None]) -> None:
+    def load_state_dict(self, state: dict[str, any]) -> None:
         """Load state from dictionary."""
-        self.mode = state_dict["mode"]
-        self.fitted = state_dict["fitted"]
-        self.mean_ = state_dict["mean_"]
-        self.std_ = state_dict["std_"]
-        self.min_ = state_dict["min_"]
-        self.max_ = state_dict["max_"]
+        self.mode = state["mode"]
+        self.fitted = state["fitted"]
+        self.min_val = state.get("min_val")
+        self.max_val = state.get("max_val")
+        self.mean_val = state.get("mean_val")
+        self.std_val = state.get("std_val")
 
 
-# Data loading utilities
-@dataclass
-class DataRecord:
-    """A single data record with embeddings and target score."""
+class EssayDataset(Dataset):
+    """Dataset class for real essay vectors and C1 scores."""
 
-    id: str
-    path: str | None = None
-    array: np.ndarray | None = None
-    score: float = 0.0
+    def __init__(self, data: pl.DataFrame):
+        super().__init__()
+        self.records = data
 
-    def __post_init__(self) -> None:
-        if (self.path is None) == (self.array is None):
-            raise ValueError("Exactly one of 'path' or 'array' must be provided")
-
-
-def load_embedding(path: str, fmt: str = "auto") -> torch.FloatTensor:
-    """Load embedding file and return as torch tensor."""
-    try:
-        if fmt == "auto":
-            if path.endswith(".npy"):
-                fmt = "npy"
-            elif path.endswith(".pt") or path.endswith(".pth"):
-                fmt = "pt"
-            else:
-                raise DataFormatError(
-                    f"Cannot auto-detect format for {path}. Use explicit format."
-                )
-
-        if fmt == "npy":
-            array = np.load(path)
-            tensor = torch.from_numpy(array).float()
-        elif fmt == "pt":
-            tensor = torch.load(path, map_location="cpu")
-            if not isinstance(tensor, torch.Tensor):
-                raise DataFormatError(
-                    f"Expected torch.Tensor in {path}, got {type(tensor)}"
-                )
-            tensor = tensor.float()
-        else:
-            raise DataFormatError(f"Unsupported format: {fmt}")
-
-        # Validate shape
-        if tensor.ndim != 2:
-            raise DataFormatError(
-                f"Expected 2D tensor [seq_len, 768] in {path}, got shape {tensor.shape}"
-            )
-        if tensor.shape[-1] != 768:
-            raise DataFormatError(
-                f"Expected 768 features in {path}, got {tensor.shape[-1]}"
-            )
-
-        return tensor
-
-    except Exception as e:
-        raise DataFormatError(f"Failed to load embedding from {path}: {e}")
-
-
-def maybe_truncate(
-    tensor: torch.Tensor, max_len: int, strategy: str = "head"
-) -> torch.Tensor:
-    """Truncate sequence if it exceeds max_len."""
-    if len(tensor) <= max_len:
-        return tensor
-
-    if strategy == "head":
-        return tensor[:max_len]
-    elif strategy == "center":
-        start = (len(tensor) - max_len) // 2
-        return tensor[start : start + max_len]
-    elif strategy == "head_tail":
-        head_len = max_len // 2
-        tail_len = max_len - head_len
-        return torch.cat([tensor[:head_len], tensor[-tail_len:]], dim=0)
-    else:
-        raise ValueError(f"Unknown truncation strategy: {strategy}")
-
-
-class EmbeddingSequenceDataset(Dataset):
-    """Dataset for loading embedding sequences and target scores."""
-
-    def __init__(
-        self,
-        records: list[DataRecord],
-        embedding_format: str = "auto",
-        max_seq_len: int = 1024,
-        pad_value: float = 0.0,
-    ) -> None:
-        self.records: list[DataRecord] = records
-        self.embedding_format: str = embedding_format
-        self.max_seq_len: int = max_seq_len
-        self.pad_value: float = pad_value
-
-        # Log sequence length statistics
-        if records:
-            self._log_sequence_stats()
-
-    def _log_sequence_stats(self) -> None:
-        """Log sequence length statistics for the dataset."""
-        lengths: list[int] = []
-        failed_count: int = 0
-
-        # Sample a subset to avoid loading all embeddings
-        sample_size = min(100, len(self.records))
-        sample_indices = np.random.choice(len(self.records), sample_size, replace=False)
-
-        for idx in sample_indices:
-            try:
-                tokens = self._load_tokens(idx)
-                lengths.append(len(tokens))
-            except Exception:
-                failed_count += 1
-
-        if lengths:
-            lengths = np.array(lengths)
-            logger.info(
-                f"Sequence length stats (n={len(lengths)}): "
-                f"mean={np.mean(lengths):.1f}, "
-                f"std={np.std(lengths):.1f}, "
-                f"min={np.min(lengths)}, "
-                f"max={np.max(lengths)}, "
-                f"median={np.median(lengths):.1f}"
-            )
-
-            if np.max(lengths) > self.max_seq_len:
-                truncated_pct = np.sum(lengths > self.max_seq_len) / len(lengths) * 100
-                logger.info(
-                    f"{truncated_pct:.1f}% of sequences will be truncated (max_seq_len={self.max_seq_len})"
-                )
-
-        if failed_count > 0:
-            logger.warning(f"Failed to load {failed_count} sample embeddings")
-
-    def _load_tokens(self, idx: int) -> torch.Tensor:
-        """Load tokens for a given index."""
-        record = self.records[idx]
-
-        if record.array is not None:
-            tokens = torch.from_numpy(record.array).float()
-        else:
-            tokens = load_embedding(record.path, self.embedding_format)
-
-        # Truncate if necessary
-        if len(tokens) > self.max_seq_len:
-            tokens = maybe_truncate(tokens, self.max_seq_len)
-
-        # Handle empty sequences
-        if len(tokens) == 0:
-            logger.warning(
-                f"Empty sequence for record {record.id}, using single zero vector"
-            )
-            tokens = torch.zeros(1, 768, dtype=torch.float32)
-
-        return tokens
-
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.records)
 
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor | float | str]:
-        """Get a single data item."""
-        record: DataRecord = self.records[idx]
+    def __getitem__(self, idx):
+        return self.records.row(idx).to_dicts()
 
-        try:
-            tokens = self._load_tokens(idx)
-        except Exception as e:
-            logger.error(f"Failed to load tokens for {record.id}: {e}")
-            # Return a single zero vector as fallback
-            tokens = torch.zeros(1, 768, dtype=torch.float32)
-
-        return {"tokens": tokens, "target": record.score, "id": record.id}
-
-    @classmethod
-    def from_csv(
-        cls,
-        csv_path: str,
-        id_column: str,
-        embedding_column: str,
-        score_column: str,
-        embedding_format: str = "auto",
-        max_seq_len: int = 1024,
-        pad_value: float = 0.0,
-        filters: dict[str, str | list[str]] | None = None,
-    ) -> "EmbeddingSequenceDataset":
-        """Create dataset from CSV file."""
-        import polars as pl
-
-        relevant_columns = [id_column, embedding_column, score_column]
-        records = (
-            pl.scan_csv(csv_path)
-            .head(max_seq_len)
-            .select(relevant_columns)
-            .drop_nulls()
-            .filter(
-                (pl.col("c1") > 0)
-            )  # Remove samples with C1 score of 0, as they are not reliable enough
-            .unique()
-            .collect()
+    def __getitems__(self, indices):
+        return (
+            self.records.with_row_index(name="index")
+            .filter(pl.col("index").is_in(indices))
+            .to_dicts()
         )
-
-        logger.info(f"Loaded {len(records)} records from {csv_path}")
-
-        return cls(records, embedding_format, max_seq_len, pad_value)
-
-    @classmethod
-    def from_parquet(
-        cls,
-        parquet_path: str,
-        id_column: str,
-        embedding_column: str,
-        score_column: str,
-        embedding_format: str = "auto",
-        max_seq_len: int = 1024,
-        pad_value: float = 0.0,
-        filters: dict[str, str | list[str]] | None = None,
-    ) -> "EmbeddingSequenceDataset":
-        """Create dataset from Parquet file."""
-        import polars as pl
-
-        relevant_columns = [id_column, embedding_column, score_column]
-        records = (
-            pl.scan_parquet(parquet_path)
-            .head(max_seq_len)
-            .select(relevant_columns)
-            .drop_nulls()
-            .filter(
-                (pl.col("c1") > 0)
-            )  # Remove samples with C1 score of 0, as they are not reliable enough
-            .unique()
-            .collect()
-        )
-
-        logger.info(f"Loaded {len(records)} records from {parquet_path}")
-
-        return cls(records, embedding_format, max_seq_len, pad_value)
-
-    @classmethod
-    def from_memory(
-        cls,
-        arrays: list[np.ndarray],
-        scores: list[float],
-        ids: list[str] | None = None,
-        embedding_format: str = "auto",
-        max_seq_len: int = 1024,
-        pad_value: float = 0.0,
-    ) -> "EmbeddingSequenceDataset":
-        """Create dataset from in-memory arrays."""
-        if len(arrays) != len(scores):
-            raise ValueError("Arrays and scores must have same length")
-
-        if ids is None:
-            ids = [f"sample_{i}" for i in range(len(arrays))]
-        elif len(ids) != len(arrays):
-            raise ValueError("IDs must have same length as arrays")
-
-        records = [
-            DataRecord(id=id_, array=array, score=score)
-            for id_, array, score in zip(ids, arrays, scores)
-        ]
-
-        return cls(records, embedding_format, max_seq_len, pad_value)
 
 
 def collate_batch(
-    batch: list[dict[str, torch.Tensor | float | str]], pad_value: float = 0.0
-) -> dict[str, torch.Tensor | list[str]]:
-    """Collate function for DataLoader."""
-    tokens_list: list[torch.Tensor] = []
-    lengths: list[int] = []
-    targets: list[float] = []
-    ids: list[str] = []
+    batch: list[dict[str, any]], pad_value: float = 0.0
+) -> dict[str, any]:
+    """Collate function for variable-length sequences."""
+    ids = [item["id"] for item in batch]
+    embeddings = [item["embedding"] for item in batch]
+    scores = [item["score"] for item in batch]
 
-    for item in batch:
-        tokens = item["tokens"]
+    # Get sequence lengths
+    lengths = torch.tensor([emb.shape[0] for emb in embeddings], dtype=torch.long)
 
-        # Ensure minimum length of 1
-        if len(tokens) == 0:
-            tokens = torch.zeros(1, 768, dtype=torch.float32)
+    # Pad sequences to same length
+    padded_embeddings = pad_sequence(
+        embeddings, batch_first=True, padding_value=pad_value
+    )
 
-        tokens_list.append(tokens)
-        lengths.append(len(tokens))
-        targets.append(item["target"])
-        ids.append(item["id"])
-
-    # Pad sequences
-    tokens_padded = pad_sequence(tokens_list, batch_first=True, padding_value=pad_value)
-    lengths = torch.tensor(lengths, dtype=torch.long)
-    targets = torch.tensor(targets, dtype=torch.float32)
-
-    return {"tokens": tokens_padded, "lengths": lengths, "targets": targets, "ids": ids}
+    return {
+        "tokens": padded_embeddings,
+        "lengths": lengths,
+        "targets": torch.tensor(scores, dtype=torch.float),
+        "ids": ids,
+    }
 
 
 def split_dataset(
-    dataset: Dataset, val_ratio: float, test_ratio: float = 0.0, seed: int = 42
-) -> tuple[Subset, Subset | None, Subset | None]:
-    """Split dataset into train/val/test subsets."""
-    dataset_size = len(dataset)
+    dataset: EssayDataset,
+    val_ratio: float = 0.1,
+    test_ratio: float = 0.1,
+    seed: int = 42,
+) -> tuple[Subset, Subset, Subset]:
+    """Split dataset into train/val/test."""
+    total_size = len(dataset)
+    val_size = int(val_ratio * total_size)
+    test_size = int(test_ratio * total_size)
+    train_size = total_size - val_size - test_size
 
-    # Calculate split sizes
-    test_size = int(dataset_size * test_ratio)
-    val_size = int(dataset_size * val_ratio)
-    train_size = dataset_size - val_size - test_size
-
-    if train_size <= 0:
-        raise ValueError("Train set would be empty. Reduce val_ratio or test_ratio.")
-
-    # Create splits
-    generator = torch.Generator().manual_seed(seed)
-
-    if test_size > 0:
-        train_val_dataset, test_dataset = random_split(
-            dataset, [train_size + val_size, test_size], generator=generator
-        )
-        train_dataset, val_dataset = random_split(
-            train_val_dataset, [train_size, val_size], generator=generator
-        )
-        return train_dataset, val_dataset, test_dataset
-    else:
-        train_dataset, val_dataset = random_split(
-            dataset, [train_size, val_size], generator=generator
-        )
-        return train_dataset, val_dataset, None
+    torch.manual_seed(seed)
+    return random_split(dataset, [train_size, val_size, test_size])
 
 
-# Model implementation
-class BiLSTMRegressor(nn.Module):
-    """Bidirectional LSTM for regression with flexible aggregation strategies."""
+# Model Components
+class AttentionAggregation(nn.Module):
+    """Attention-based sequence aggregation."""
 
-    def __init__(self, config: ModelConfig) -> None:
+    def __init__(self, hidden_size: int):
         super().__init__()
-        self.config: ModelConfig = config
+        self.attention = nn.Linear(hidden_size, 1)
 
-        # Validate input dimension
-        if config.input_dim != 768:
-            logger.warning(
-                f"Input dimension {config.input_dim} != 768. "
-                f"Make sure this matches your embeddings."
-            )
+    def forward(self, sequences: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
+        """Apply attention aggregation."""
+        # sequences: [batch_size, seq_len, hidden_size]
+        # lengths: [batch_size]
 
-        # LSTM layer
-        lstm_dropout = config.dropout if config.num_layers > 1 else 0.0
+        batch_size, seq_len, hidden_size = sequences.shape
+
+        # Compute attention weights
+        attention_weights = self.attention(sequences)  # [batch_size, seq_len, 1]
+
+        # Create mask for padding
+        mask = torch.arange(seq_len, device=sequences.device).unsqueeze(
+            0
+        ) < lengths.unsqueeze(1)
+        mask = mask.unsqueeze(-1)  # [batch_size, seq_len, 1]
+
+        # Apply mask to attention weights
+        attention_weights = attention_weights.masked_fill(~mask, float("-inf"))
+        attention_weights = torch.softmax(attention_weights, dim=1)
+
+        # Weighted sum
+        aggregated = (sequences * attention_weights).sum(
+            dim=1
+        )  # [batch_size, hidden_size]
+
+        return aggregated
+
+
+class BiLSTMRegressor(nn.Module):
+    """Bidirectional LSTM for essay C1 score regression."""
+
+    def __init__(self, config: ModelConfig):
+        super().__init__()
+        self.config = config
+
+        # LSTM layers
         self.lstm = nn.LSTM(
             input_size=config.input_dim,
             hidden_size=config.hidden_size,
             num_layers=config.num_layers,
             batch_first=True,
-            dropout=lstm_dropout,
             bidirectional=config.bidirectional,
+            dropout=config.dropout if config.num_layers > 1 else 0.0,
         )
 
-        # Calculate representation dimension
-        self.rep_dim = config.hidden_size * (2 if config.bidirectional else 1)
+        # Aggregation layer
+        lstm_output_size = (
+            config.hidden_size * 2 if config.bidirectional else config.hidden_size
+        )
 
-        # Attention mechanism for 'attn' aggregation
         if config.aggregation == "attn":
-            self.attention_query = nn.Parameter(torch.randn(self.rep_dim))
-            self.attention_proj = nn.Linear(self.rep_dim, 1)
-
-        # Optional layer normalization
-        if config.use_layer_norm:
-            self.layer_norm = nn.LayerNorm(self.rep_dim)
+            self.aggregation = AttentionAggregation(lstm_output_size)
         else:
-            self.layer_norm = None
+            self.aggregation = None
 
         # MLP head
-        if config.mlp_hidden is not None:
-            self.head = nn.Sequential(
-                nn.Linear(self.rep_dim, config.mlp_hidden),
-                nn.GELU(),
-                nn.Dropout(config.dropout),
-                nn.Linear(config.mlp_hidden, 1),
+        mlp_layers = []
+        current_size = lstm_output_size
+
+        if config.mlp_hidden:
+            if config.use_layer_norm:
+                mlp_layers.append(nn.LayerNorm(current_size))
+            mlp_layers.extend(
+                [
+                    nn.Linear(current_size, config.mlp_hidden),
+                    nn.ReLU(),
+                    nn.Dropout(config.dropout),
+                ]
             )
-        else:
-            self.head = nn.Linear(self.rep_dim, 1)
+            current_size = config.mlp_hidden
 
-        self._init_weights()
-
-    def _init_weights(self) -> None:
-        """Initialize model weights."""
-        for name, param in self.named_parameters():
-            if "lstm" in name:
-                if "weight_ih" in name:
-                    nn.init.xavier_uniform_(param.data)
-                elif "weight_hh" in name:
-                    nn.init.orthogonal_(param.data)
-                elif "bias" in name:
-                    param.data.fill_(0.0)
-                    # Set forget gate bias to 1
-                    n = param.size(0)
-                    param.data[(n // 4) : (n // 2)].fill_(1.0)
-            elif "head" in name and "weight" in name:
-                nn.init.xavier_uniform_(param.data)
-            elif "head" in name and "bias" in name:
-                param.data.fill_(0.0)
-
-    def _aggregate_last(
-        self,
-        lstm_output: torch.Tensor | None,
-        hidden: tuple[torch.Tensor, torch.Tensor],
-        lengths: torch.Tensor,
-    ) -> torch.Tensor:
-        """Use the last hidden states from each direction."""
-        h_n, _ = hidden  # [num_layers * num_directions, batch, hidden_size]
-
-        if self.config.bidirectional:
-            # Concatenate forward and backward final hidden states
-            # h_n[-2] is the forward direction of the last layer
-            # h_n[-1] is the backward direction of the last layer
-            representation = torch.cat([h_n[-2], h_n[-1]], dim=1)
-        else:
-            # Use the final hidden state from the last layer
-            representation = h_n[-1]
-
-        return representation  # [batch, rep_dim]
-
-    def _aggregate_pooling(
-        self, lstm_output: torch.Tensor, lengths: torch.Tensor, method: str = "mean"
-    ) -> torch.Tensor:
-        """Apply mean or max pooling over the sequence dimension."""
-        batch_size, max_len, hidden_size = lstm_output.shape
-
-        # Create mask for valid positions
-        mask = (
-            torch.arange(max_len, device=lstm_output.device)[None, :] < lengths[:, None]
-        )
-        mask = mask.unsqueeze(-1).expand_as(
-            lstm_output
-        )  # [batch, max_len, hidden_size]
-
-        if method == "mean":
-            # Masked mean pooling
-            masked_output = lstm_output * mask.float()
-            representation = masked_output.sum(dim=1) / lengths.float().unsqueeze(-1)
-        elif method == "max":
-            # Masked max pooling
-            masked_output = lstm_output.masked_fill(~mask, float("-inf"))
-            representation, _ = masked_output.max(dim=1)
-        else:
-            raise ValueError(f"Unknown pooling method: {method}")
-
-        return representation  # [batch, rep_dim]
-
-    def _aggregate_attention(
-        self, lstm_output: torch.Tensor, lengths: torch.Tensor
-    ) -> torch.Tensor:
-        """Apply attention mechanism over the sequence."""
-        batch_size, max_len, hidden_size = lstm_output.shape
-
-        # Compute attention scores
-        # lstm_output: [batch, max_len, hidden_size]
-        # attention_query: [hidden_size]
-        attention_scores = torch.matmul(
-            lstm_output, self.attention_query
-        )  # [batch, max_len]
-
-        # Create mask for valid positions
-        mask = (
-            torch.arange(max_len, device=lstm_output.device)[None, :] < lengths[:, None]
-        )
-
-        # Apply mask to attention scores
-        attention_scores = attention_scores.masked_fill(~mask, float("-inf"))
-
-        # Softmax to get attention weights
-        attention_weights = torch.softmax(attention_scores, dim=1)  # [batch, max_len]
-
-        # Weighted sum of LSTM outputs
-        representation = torch.sum(
-            lstm_output * attention_weights.unsqueeze(-1), dim=1
-        )  # [batch, hidden_size]
-
-        return representation  # [batch, rep_dim]
+        mlp_layers.append(nn.Linear(current_size, 1))
+        self.head = nn.Sequential(*mlp_layers)
 
     def forward(self, tokens: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
-        """Forward pass.
-
-        Args:
-            tokens: [batch_size, max_len, 768]
-            lengths: [batch_size] - actual sequence lengths
-
-        Returns:
-            predictions: [batch_size] - regression predictions
-        """
+        """Forward pass through the model."""
         batch_size = tokens.shape[0]
 
-        # Pack sequences for efficient LSTM processing
-        packed_input = pack_padded_sequence(
+        # Pack sequences for LSTM efficiency
+        packed = pack_padded_sequence(
             tokens, lengths.cpu(), batch_first=True, enforce_sorted=False
         )
 
         # LSTM forward pass
-        packed_output, hidden = self.lstm(packed_input)
+        packed_output, (hidden, cell) = self.lstm(packed)
+        lstm_output, _ = pad_packed_sequence(packed_output, batch_first=True)
 
-        # Unpack for aggregation (except for 'last' which uses hidden directly)
-        if self.config.aggregation != "last":
-            lstm_output, _ = pad_packed_sequence(packed_output, batch_first=True)
-        else:
-            lstm_output = None
-
-        # Apply aggregation strategy
+        # Aggregate sequence representation
         if self.config.aggregation == "last":
-            representation = self._aggregate_last(lstm_output, hidden, lengths)
+            # Use last hidden states from both directions
+            if self.config.bidirectional:
+                # Concatenate forward and backward final states
+                representation = torch.cat([hidden[-2], hidden[-1]], dim=1)
+            else:
+                representation = hidden[-1]
+
         elif self.config.aggregation == "mean":
-            representation = self._aggregate_pooling(lstm_output, lengths, "mean")
+            # Mean pooling over valid tokens
+            mask = torch.arange(lstm_output.shape[1], device=tokens.device).unsqueeze(
+                0
+            ).expand(batch_size, -1) < lengths.unsqueeze(1)
+            masked_output = lstm_output * mask.unsqueeze(-1)
+            representation = masked_output.sum(dim=1) / lengths.unsqueeze(-1).float()
+
         elif self.config.aggregation == "max":
-            representation = self._aggregate_pooling(lstm_output, lengths, "max")
+            # Max pooling over valid tokens
+            mask = torch.arange(lstm_output.shape[1], device=tokens.device).unsqueeze(
+                0
+            ).expand(batch_size, -1) < lengths.unsqueeze(1)
+            masked_output = lstm_output.masked_fill(~mask.unsqueeze(-1), float("-inf"))
+            representation = masked_output.max(dim=1)[0]
+
         elif self.config.aggregation == "attn":
-            representation = self._aggregate_attention(lstm_output, lengths)
+            # Attention-based aggregation
+            representation = self.aggregation(lstm_output, lengths)
+
         else:
             raise ValueError(f"Unknown aggregation method: {self.config.aggregation}")
-
-        # Apply layer normalization if configured
-        if self.layer_norm is not None:
-            representation = self.layer_norm(representation)
 
         # Apply MLP head
         predictions = self.head(representation).squeeze(-1)  # [batch_size]
@@ -911,7 +617,7 @@ class MetricsAccumulator:
     def compute_metrics(
         self, target_scaler: TargetScaler | None = None
     ) -> dict[str, float]:
-        """Compute all regression metrics."""
+        """Compute all regression metrics (matching BERT script style)."""
         if not self.predictions:
             return {}
 
@@ -928,7 +634,8 @@ class MetricsAccumulator:
 
         # Standard regression metrics
         mae = np.mean(np.abs(preds_clamped - targets))
-        rmse = np.sqrt(np.mean((preds_clamped - targets) ** 2))
+        mse = np.mean((preds_clamped - targets) ** 2)
+        rmse = np.sqrt(mse)
 
         # R-squared
         ss_res = np.sum((targets - preds_clamped) ** 2)
@@ -942,10 +649,45 @@ class MetricsAccumulator:
         step_accuracy = np.mean(preds_snapped == targets_snapped)
         mae_step = np.mean(np.abs(preds_snapped - targets_snapped))
 
+        # Round to C1 levels for kappa calculations
+        true_labels_rounded = round_to_c1_levels(targets.tolist())
+        predictions_rounded = round_to_c1_levels(preds_clamped.tolist())
+
+        # Cohen's Kappa
+        try:
+            kappa = sklearn.metrics.cohen_kappa_score(
+                true_labels_rounded, predictions_rounded
+            )
+        except Exception:
+            kappa = 0.0
+
+        # Quadratic Weighted Kappa
+        try:
+            qwk = quadratic_weighted_kappa(
+                true_labels_rounded,
+                predictions_rounded,
+                labels=[0, 40, 80, 120, 160, 200],
+            )
+        except Exception:
+            qwk = 0.0
+
+        # Pearson correlation
+        try:
+            pearson_corr, pearson_p = scipy.stats.pearsonr(targets, preds_clamped)
+            if np.isnan(pearson_corr):
+                pearson_corr = 0.0
+        except Exception:
+            pearson_corr = 0.0
+
         return {
+            "loss": float(mse),  # Use MSE as loss for compatibility with BERT script
             "mae": float(mae),
+            "mse": float(mse),
             "rmse": float(rmse),
             "r2": float(r2),
+            "kappa": float(kappa),
+            "qwk": float(qwk),
+            "pearson_corr": float(pearson_corr),
             "step_accuracy": float(step_accuracy),
             "mae_step": float(mae_step),
             "count": len(preds),
@@ -1032,7 +774,7 @@ def evaluate_model(
 
 def create_synthetic_dataset(
     n_samples: int = 256, min_len: int = 5, max_len: int = 200
-) -> EmbeddingSequenceDataset:
+) -> EssayDataset:
     """Create a synthetic dataset for testing."""
     # Generate random embeddings and scores
     arrays = []
@@ -1047,307 +789,5 @@ def create_synthetic_dataset(
         arrays.append(embedding)
         scores.append(score)
 
-    return EmbeddingSequenceDataset.from_memory(arrays, scores)
+    return EssayDataset.from_memory(arrays, scores)
 
-
-def smoke_test() -> None:
-    """Run a quick smoke test with synthetic data."""
-    logger.info("Running smoke test with synthetic data...")
-
-    # Set up
-    device = get_device("auto")
-    set_seed(42)
-
-    # Create synthetic dataset
-    dataset = create_synthetic_dataset(256)
-    train_dataset, val_dataset, _ = split_dataset(dataset, 0.2, 0.0, seed=42)
-
-    # Create data loaders
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=16,
-        shuffle=True,
-        collate_fn=lambda batch: collate_batch(batch, 0.0),
-        num_workers=0,  # Avoid multiprocessing issues in tests
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=16,
-        shuffle=False,
-        collate_fn=lambda batch: collate_batch(batch, 0.0),
-        num_workers=0,
-    )
-
-    # Create model
-    model_config = ModelConfig(hidden_size=64, num_layers=1)
-    model = BiLSTMRegressor(model_config).to(device)
-
-    # Create optimizer and loss
-    optimizer = optim.AdamW(model.parameters(), lr=1e-3)
-    loss_fn = get_loss_fn("mse")
-
-    # Train for 2 epochs
-    logger.info("Training for 2 epochs...")
-    for epoch in range(2):
-        model.train()
-        train_loss = 0
-        for batch_idx, batch in enumerate(train_loader):
-            tokens = batch["tokens"].to(device)
-            lengths = batch["lengths"].to(device)
-            targets = batch["targets"].to(device)
-
-            optimizer.zero_grad()
-            preds = model(tokens, lengths)
-            loss = loss_fn(preds, targets)
-            loss.backward()
-            optimizer.step()
-
-            train_loss += loss.item()
-
-            if batch_idx == 0:  # Log first batch
-                logger.info(
-                    f"Epoch {epoch + 1}, Batch {batch_idx + 1}: loss={loss.item():.4f}"
-                )
-
-        # Validation
-        val_metrics, _ = evaluate_model(model, val_loader, device)
-        logger.info(
-            f"Epoch {epoch + 1}: train_loss={train_loss / len(train_loader):.4f}, "
-            f"val_rmse={val_metrics.get('rmse', 0):.4f}, "
-            f"val_step_acc={val_metrics.get('step_accuracy', 0):.3f}"
-        )
-
-    logger.info("Smoke test completed successfully!")
-
-
-def parse_args() -> argparse.Namespace:
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Bidirectional LSTM for Essay C1 Score Prediction",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Train with validation split
-  python bidirectional_lstm.py train --train-csv data.csv --val-split 0.2
-  
-  # Train with separate validation file
-  python bidirectional_lstm.py train --train-csv train.csv --val-csv val.csv
-  
-  # Evaluate model
-  python bidirectional_lstm.py eval --checkpoint runs/bilstm/best.pt --test-csv test.csv
-  
-  # Generate predictions
-  python bidirectional_lstm.py predict --checkpoint runs/bilstm/best.pt --input-csv new_data.csv
-  
-  # Run smoke test
-  python bidirectional_lstm.py smoke
-""",
-    )
-
-    subparsers = parser.add_subparsers(dest="command", help="Available commands")
-
-    # Common arguments
-    def add_common_args(p: argparse.ArgumentParser) -> None:
-        p.add_argument(
-            "--device",
-            choices=["auto", "cpu", "cuda", "mps"],
-            default="auto",
-            help="Device to use (default: auto)",
-        )
-        p.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
-        p.add_argument(
-            "--output-dir",
-            type=str,
-            default="runs/bilstm",
-            help="Output directory (default: runs/bilstm)",
-        )
-
-    def add_data_args(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--id-col", type=str, default="id", help="ID column name")
-        p.add_argument(
-            "--embedding-col",
-            type=str,
-            default="embedding_path",
-            help="Embedding file path column name",
-        )
-        p.add_argument("--score-col", type=str, default="c1", help="Score column name")
-        p.add_argument(
-            "--embedding-format",
-            choices=["auto", "npy", "pt"],
-            default="auto",
-            help="Embedding file format",
-        )
-        p.add_argument(
-            "--max-seq-len", type=int, default=1024, help="Maximum sequence length"
-        )
-        p.add_argument(
-            "--num-workers", type=int, default=4, help="Number of data loader workers"
-        )
-
-    def add_model_args(p: argparse.ArgumentParser) -> None:
-        p.add_argument(
-            "--hidden-size",
-            type=int,
-            default=256,
-            help="LSTM hidden size (default: 256)",
-        )
-        p.add_argument(
-            "--num-layers",
-            type=int,
-            default=2,
-            help="Number of LSTM layers (default: 2)",
-        )
-        p.add_argument(
-            "--dropout", type=float, default=0.1, help="Dropout rate (default: 0.1)"
-        )
-        p.add_argument(
-            "--aggregation",
-            choices=["last", "mean", "max", "attn"],
-            default="last",
-            help="Sequence aggregation method (default: last)",
-        )
-        p.add_argument(
-            "--mlp-hidden",
-            type=int,
-            default=256,
-            help="MLP head hidden size (default: 256)",
-        )
-        p.add_argument(
-            "--layer-norm", action="store_true", help="Use layer normalization"
-        )
-
-    # Train command
-    train_parser = subparsers.add_parser("train", help="Train the model")
-    add_common_args(train_parser)
-    add_data_args(train_parser)
-    add_model_args(train_parser)
-
-    train_parser.add_argument(
-        "--train-csv", type=str, required=True, help="Training data CSV file"
-    )
-    train_parser.add_argument(
-        "--val-csv", type=str, help="Validation data CSV file (optional)"
-    )
-    train_parser.add_argument(
-        "--val-split",
-        type=float,
-        default=0.1,
-        help="Validation split ratio if no val-csv provided",
-    )
-    train_parser.add_argument(
-        "--epochs", type=int, default=20, help="Number of training epochs"
-    )
-    train_parser.add_argument(
-        "--batch-size", type=int, default=32, help="Training batch size"
-    )
-    train_parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
-    train_parser.add_argument(
-        "--weight-decay", type=float, default=1e-4, help="Weight decay"
-    )
-    train_parser.add_argument(
-        "--scheduler",
-        choices=["plateau", "onecycle", "none"],
-        default="plateau",
-        help="Learning rate scheduler",
-    )
-    train_parser.add_argument(
-        "--patience", type=int, default=5, help="Early stopping patience"
-    )
-    train_parser.add_argument(
-        "--grad-clip", type=float, default=1.0, help="Gradient clipping norm"
-    )
-    train_parser.add_argument(
-        "--target-scaler",
-        choices=["none", "minmax", "standard"],
-        default="minmax",
-        help="Target scaling method",
-    )
-
-    # Eval command
-    eval_parser = subparsers.add_parser("eval", help="Evaluate the model")
-    add_common_args(eval_parser)
-    add_data_args(eval_parser)
-
-    eval_parser.add_argument(
-        "--checkpoint", type=str, required=True, help="Model checkpoint to evaluate"
-    )
-    eval_parser.add_argument(
-        "--test-csv", type=str, required=True, help="Test data CSV file"
-    )
-
-    # Predict command
-    predict_parser = subparsers.add_parser("predict", help="Generate predictions")
-    add_common_args(predict_parser)
-    add_data_args(predict_parser)
-
-    predict_parser.add_argument(
-        "--checkpoint", type=str, required=True, help="Model checkpoint for prediction"
-    )
-    predict_parser.add_argument(
-        "--input-csv", type=str, required=True, help="Input data CSV file"
-    )
-    predict_parser.add_argument(
-        "--output",
-        type=str,
-        default="predictions.csv",
-        help="Output predictions CSV file",
-    )
-    predict_parser.add_argument(
-        "--snap-to-step", action="store_true", help="Include step-snapped predictions"
-    )
-
-    # Smoke test command
-    smoke_parser = subparsers.add_parser(
-        "smoke", help="Run smoke test with synthetic data"
-    )
-    add_common_args(smoke_parser)
-
-    return parser.parse_args()
-
-
-def main() -> int:
-    """Main function."""
-    args: argparse.Namespace = parse_args()
-
-    if not args.command:
-        print("Error: No command specified. Use -h for help.")
-        return 1
-
-    # Set up logging
-    log_file = None
-    if args.command in ["train", "eval"]:
-        ensure_dir(args.output_dir)
-        log_file = os.path.join(args.output_dir, f"{args.command}.log")
-
-    setup_logging(log_file)
-
-    # Set device and seed
-    device = get_device(args.device)
-    set_seed(args.seed)
-
-    try:
-        if args.command == "smoke":
-            smoke_test()
-        elif args.command == "train":
-            logger.info("Training command is not fully implemented yet.")
-            logger.info("This implementation provides the complete model architecture ")
-            logger.info("and all necessary components for training.")
-            logger.info("To complete: implement Trainer class and training loop.")
-        elif args.command == "eval":
-            logger.info("Evaluation command is not fully implemented yet.")
-            logger.info("Use evaluate_model() function with your trained model.")
-        elif args.command == "predict":
-            logger.info("Prediction command is not fully implemented yet.")
-            logger.info("Use evaluate_model() function and extract predictions.")
-        else:
-            logger.error(f"Unknown command: {args.command}")
-            return 1
-    except Exception as e:
-        logger.error(f"Error in {args.command}: {e}", exc_info=True)
-        return 1
-
-    return 0
-
-
-if __name__ == "__main__":
-    exit(main())

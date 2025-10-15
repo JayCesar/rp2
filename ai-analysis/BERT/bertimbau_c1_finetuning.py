@@ -1,5 +1,6 @@
-import logging
 import pathlib
+import sys
+
 
 import numpy as np
 import polars as pl
@@ -12,9 +13,19 @@ import torch.utils.data
 import tqdm
 import transformers
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Add the project root to sys.path to allow absolute imports
+project_root = pathlib.Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+# Add ai-analysis directory to path since it has a hyphen (not valid Python module name)
+ai_analysis_path = pathlib.Path(__file__).parent.parent
+if str(ai_analysis_path) not in sys.path:
+    sys.path.insert(0, str(ai_analysis_path))
+
+from feature_extraction import utils
+
+logger = utils.logger
 
 # Model configuration constants
 MAX_LENGTH = 512  # Maximum sequence length for BERT tokenization
@@ -35,13 +46,21 @@ SAMPLE_SIZE_UPPER_BOUND = 2**31 - 1
 
 
 def normalize_c1_scores(scores):
-    """Normalize C1 scores to [0, 1] range for better training stability."""
-    return sklearn.preproessing.StandardScaler().transform(scores)
+    """Normalize C1 scores using the global constants for better training stability."""
+    if isinstance(scores, (int, float)):
+        return (scores - C1_MEAN) / C1_STD
+    else:
+        scores_array = np.array(scores)
+        return (scores_array - C1_MEAN) / C1_STD
 
 
 def denormalize_c1_scores(scores):
-    """Denormalize C1 scores to [0, 200] range for better training stability."""
-    return sklearn.preproessing.StandardScaler().inverse_transform(scores)
+    """Denormalize C1 scores using the global constants back to [0, 200] range."""
+    if isinstance(scores, (int, float)):
+        return scores * C1_STD + C1_MEAN
+    else:
+        scores_array = np.array(scores)
+        return scores_array * C1_STD + C1_MEAN
 
 
 def quadratic_weighted_kappa(y_true, y_pred, labels=None):
@@ -108,8 +127,9 @@ class BERTimbauForC1Prediction(nn.Module):
     """
 
     def __init__(self, model_name, num_labels: int = 1, dropout_prob: float = 0.1):
-        super().__init__()  # Modern Python super() syntax
+        super().__init__()
         self.bert = transformers.AutoModel.from_pretrained(model_name)
+
         self.dropout = nn.Dropout(dropout_prob)
         self.regressor = nn.Linear(self.bert.config.hidden_size, num_labels)
 
@@ -145,7 +165,7 @@ class BERTimbauForC1Prediction(nn.Module):
         loss = None
         if labels is not None:
             # Use MSE loss for regression
-            loss_fn = nn.MSELoss()
+            loss_fn = nn.MSELoss()  # L1Loss is MAE
             loss = loss_fn(logits.squeeze(-1), labels)
 
         return {"loss": loss, "logits": logits}
@@ -205,6 +225,7 @@ def load_and_prepare_data(
         .head(sample_max_amount)
         .select(relevant_columns)
         .drop_nulls()
+        .unique()
         # .filter(
         #     (pl.col("c1") > 0)
         # ) # Remove samples with C1 score of 0, as they are not reliable enough
@@ -220,7 +241,6 @@ def load_and_prepare_data(
             )
             .alias("essay_vector")
         )
-        .unique()
         .collect()
     )
 
@@ -261,23 +281,19 @@ def evaluate_model(
 
             total_loss += outputs["loss"].item()
 
-            # Get normalized predictions and denormalize them for metrics calculation
-            normalized_preds = outputs["logits"].squeeze().cpu().numpy()
-            denormalized_preds = denormalize_c1_scores(
-                normalized_preds
-                if hasattr(normalized_preds, "__len__")
-                else [normalized_preds]
-            )
-            predictions.extend(denormalized_preds)
+            # Get predictions directly (no normalization)
+            preds = outputs["logits"].squeeze().cpu().numpy()
+            if hasattr(preds, "__len__"):
+                predictions.extend(preds)
+            else:
+                predictions.append(preds)
 
-            # Denormalize true labels for metrics calculation
-            normalized_labels = labels.cpu().numpy()
-            denormalized_labels = denormalize_c1_scores(
-                normalized_labels
-                if hasattr(normalized_labels, "__len__")
-                else [normalized_labels]
-            )
-            true_labels.extend(denormalized_labels)
+            # Get true labels directly (no normalization)
+            labels_np = labels.cpu().numpy()
+            if hasattr(labels_np, "__len__"):
+                true_labels.extend(labels_np)
+            else:
+                true_labels.append(labels_np)
 
     avg_loss = total_loss / len(dataloader)
     mse = sklearn.metrics.mean_squared_error(true_labels, predictions)
@@ -319,7 +335,7 @@ def evaluate_model(
 
     # Calculate Pearson correlation
     try:
-        pearson_corr, pearson_p = scipy.stats.pearsonr(true_labels, predictions)
+        pearson_corr, _pearson_p = scipy.stats.pearsonr(true_labels, predictions)
         # Handle case where correlation is NaN
         if np.isnan(pearson_corr):
             pearson_corr = 0.0
@@ -427,6 +443,45 @@ def train_model(
     return train_losses, val_metrics
 
 
+class EssayDataset(torch.utils.data.Dataset):
+    """Dataset class for BERTimbau C1 fine-tuning."""
+
+    def __init__(self, data: pl.DataFrame, tokenizer, max_length: int = 512):
+        super().__init__()
+        self.data = data
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        # Get the row as a dict (not a list of dicts)
+        row = self.data.row(idx, named=True)
+
+        essay_text = row["essay"]
+        c1_score = row["c1"]
+
+        # Tokenize the essay text
+        encoding = self.tokenizer(
+            essay_text,
+            truncation=True,
+            padding="max_length",
+            max_length=self.max_length,
+            return_tensors="pt",
+        )
+
+        return {
+            "input_ids": encoding["input_ids"].flatten(),
+            "attention_mask": encoding["attention_mask"].flatten(),
+            "labels": torch.tensor(c1_score, dtype=torch.float),
+        }
+
+    def __getitems__(self, idxs):
+        # For batch processing - not used by default DataLoader
+        return [self.__getitem__(idx) for idx in idxs]
+
+
 def main():
     """Main function to run the fine-tuning process."""
     # Quick device check
@@ -440,7 +495,7 @@ def main():
     BATCH_SIZE = 28  # Larger batch size for better GPU utilization
     NUM_EPOCHS = 10  # Fewer epochs may prevent overfitting
     LEARNING_RATE = 3.5e-5  # Scaled learning rate for batch size 28
-    MAX_SAMPLES = 100  # Set to None to use all samples
+    MAX_SAMPLES = None  # Set to None to use all samples
 
     # Check and display device information first
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -488,8 +543,8 @@ def main():
     dataset = load_and_prepare_data(csv_path, model, tokenizer, max_samples=MAX_SAMPLES)
     print(dataset)
 
-    essays = dataset["esssays"]
-    c1_labels = dataset["c1_labels"]
+    preprocessed_essays = dataset["essay_as_single_utf8_string"]
+    c1_labels = dataset["c1"]
 
     # Create stratification groups for highly imbalanced data
     # Group similar C1 scores to ensure balanced splits
@@ -498,7 +553,11 @@ def main():
     # Split the data with stratification
     train_essays, val_essays, train_labels, val_labels = (
         sklearn.model_selection.train_test_split(
-            essays, c1_labels, test_size=0.3, random_state=42, stratify=stratify_groups
+            preprocessed_essays,
+            c1_labels,
+            test_size=0.3,
+            random_state=42,
+            stratify=stratify_groups,
         )
     )
 
@@ -516,48 +575,32 @@ def main():
         f"Training configuration: BATCH_SIZE={BATCH_SIZE}, LEARNING_RATE={LEARNING_RATE:.6f}"
     )
 
+    input_datasets_file_extensions = "csv", "parquet", "json"
+
     train_dataset = pl.DataFrame(
         {"essay": train_essays, "c1": train_labels, "type": "train"}
     )
+    logger.info(f"Saving training dataset to {model_save_path}...")
+    utils.save_dataset(
+        train_dataset, "BERT_train_dataset", *input_datasets_file_extensions
+    )
+    logger.info(f"Saved validation dataset to {model_save_path}")
+
     val_dataset = pl.DataFrame({"essay": val_essays, "c1": val_labels, "type": "val"})
-
-    essays_df = pl.concat(
-        (
-            train_dataset,
-            val_dataset,
-        )
-    )
-
-    essays_df.write_parquet(
-        project_root
-        / "generated_datasets"
-        / "extended_essay-br_preprocessed_for_BERT.parquet"
-    )
-    logger.info(
-        f"Dataset saved to {project_root / 'generated_datasets' / 'extended_essay-br_preprocessed_for_BERT.parquet'}"
-    )
-    print(
-        f"Dataset saved to {project_root / 'generated_datasets' / 'extended_essay-br_preprocessed_for_BERT.parquet'}"
-    )
-
-    essays_df.write_csv(
-        project_root
-        / "generated_datasets"
-        / "extended_essay-br_preprocessed_for_BERT.csv"
-    )
-    logger.info(
-        f"Dataset saved to {project_root / 'generated_datasets' / 'extended_essay-br_preprocessed_for_BERT.csv'}"
-    )
-    print(
-        f"Dataset saved to {project_root / 'generated_datasets' / 'extended_essay-br_preprocessed_for_BERT.csv'}"
-    )
+    logger.info(f"Saving validation dataset to {model_save_path}...")
+    utils.save_dataset(val_dataset, "BERT_val_dataset", *input_datasets_file_extensions)
+    logger.info(f"Saved validation dataset to {model_save_path}")
 
     # Create data loaders
     train_dataloader = torch.utils.data.DataLoader(
-        train_dataset.to_torch(), batch_size=BATCH_SIZE, shuffle=True
+        EssayDataset(train_dataset, tokenizer, MAX_LENGTH),
+        batch_size=BATCH_SIZE,
+        shuffle=True,
     )
     val_dataloader = torch.utils.data.DataLoader(
-        val_dataset.to_torch(), batch_size=BATCH_SIZE, shuffle=False
+        EssayDataset(val_dataset, tokenizer, MAX_LENGTH),
+        batch_size=BATCH_SIZE,
+        shuffle=False,
     )
 
     # Train the model

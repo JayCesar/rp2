@@ -32,11 +32,6 @@ def preprocess_text(text: str, idx: int) -> str:
     )
     text = re.sub(r"\S+@\S+", "", text)
 
-    # Remove excessive punctuation (keep some for sentence structure)
-    text = re.sub(r"[!]{2,}", "!", text)
-    text = re.sub(r"[?]{2,}", "?", text)
-    text = re.sub(r"[.]{3,}", "...", text)
-
     # Process with spaCy
     doc = nlp(text)
 
@@ -114,13 +109,12 @@ def load_and_preprocess_dataset(
 
 def main():
     project_root = pathlib.Path(__file__).parent.parent.parent
+    assert project_root.name == "rp2"
+
     original_dataset_csv_path = project_root / "database" / "extended_essay-br.csv"
 
     dataset = load_and_preprocess_dataset(original_dataset_csv_path)
     logger.info(f"Dataset loaded with {len(dataset)} samples")
-
-    generated_datasets_path = project_root / "generated_datasets"
-    generated_datasets_filename = "extended_essay-br_preprocessed_for_BERT"
 
     generated_dataset_extensions = "csv", "parquet", "json"
     utils.save_dataset(
