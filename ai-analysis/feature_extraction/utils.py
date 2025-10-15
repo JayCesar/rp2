@@ -8,8 +8,9 @@ import polars as pl
 import spacy
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logging.root.handlers = []
+logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler(sys.stdout)])
+logger = logging.getLogger()
 
 
 def essay_line_to_single_utf8_string(essay_line: str):
