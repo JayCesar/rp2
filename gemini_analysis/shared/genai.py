@@ -1,12 +1,12 @@
 import logging
 
 from google import genai
-from google.genai import types
+from google.genai import types, Client
 
-def init(api_key):
+def init(api_key: str) -> Client:
 
     try:
-        client = genai.Client(
+        client: Client = genai.Client(
             api_key=api_key,
         )
 
@@ -14,10 +14,11 @@ def init(api_key):
     except Exception as e:
         logging.error(f"Erro ao inicializar cliente genai: {e}", exc_info=True)
 
-def generate(client, input, instructions):
+def generate(client: Client, input: str, instructions: str) -> str:
 
     try:
-        response = client.models.generate_content(
+
+        response: types.GenerateContentResponse = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=input,
             config=types.GenerateContentConfig(
@@ -27,7 +28,7 @@ def generate(client, input, instructions):
             ),
         )
 
+        return response.text
+
     except Exception as e:
         logging.error(f"Erro ao gerar resposta: {e}", exc_info=True)
-
-    return (response.text)

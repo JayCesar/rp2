@@ -1,3 +1,3 @@
-def validate_response(response:str) -> bool:
+def validate_and_extract_response(response:str) -> bool:
 
     return
