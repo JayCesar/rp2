@@ -89,7 +89,7 @@ def main():
         # 6. Create model configuration (small for quick testing)
         model_config = ModelConfig(
             input_dim=768,
-            hidden_size=64,  # Small for faster training
+            hidden_sizes=[10, 26, 21],
             num_layers=1,  # Single layer for simplicity
             bidirectional=True,
             dropout=0.1,
@@ -170,4 +170,3 @@ if __name__ == "__main__":
     import numpy as np
 
     exit(main())
-

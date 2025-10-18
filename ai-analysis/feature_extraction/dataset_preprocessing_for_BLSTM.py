@@ -2,22 +2,27 @@ import pathlib
 import subprocess
 import sys
 
-import numpy as np
 import polars as pl
+import torch
 import transformers
 import utils
 
 logger = utils.logger
 
-ROW_UPPER_LIMIT = None  # Set to None to use all samples
-
 # Configuration
 MODEL_NAME = "neuralmind/bert-base-portuguese-cased"  # BERTimbau
 MAX_LENGTH = 512  # BERT maximum sequence length
-BATCH_SIZE = 28  # Larger batch size for better GPU utilization
-NUM_EPOCHS = 10  # Fewer epochs may prevent overfitting
-LEARNING_RATE = 3.5e-5  # Scaled learning rate for batch size 28
 MAX_SAMPLES = None  # Set to None to use all samples
+
+# Initialize model
+logger.info(f"Loading model from {MODEL_NAME}")
+model = transformers.AutoModel.from_pretrained(MODEL_NAME)
+logger.info("model loaded")
+
+# Initialize tokenizer
+logger.info(f"Loading tokenizer from {MODEL_NAME}")
+tokenizer = transformers.AutoTokenizer.from_pretrained(MODEL_NAME)
+logger.info("tokenizer loaded")
 
 project_root = pathlib.Path(__file__).parent.parent.parent
 assert project_root.name == "rp2"
@@ -29,7 +34,7 @@ def essay_token_count(encoded_essay):
     return len(essay_tokens)
 
 
-def vectorize_essay(essay, idx, model, tokenizer):
+def vectorize_essay(essay, idx):
     if idx % 10 == 0:
         logger.info(f"vectorize_essay: essay {idx}")
 
@@ -40,17 +45,17 @@ def vectorize_essay(essay, idx, model, tokenizer):
         return_tensors="pt",
     )
 
-    # The vector representation of the [CLS] token is used to represent the
-    # entire essay
-    all_token_vectors = model(tokenized_essay)[0]
-    cls_token_vector = (
-        all_token_vectors[0][0].detach().numpy()
-    )  # [0] for batch, then [0] for CLS token
+    with torch.no_grad():
+        # Get BERT embeddings using the underlying BERT model
+        # instead of going through the custom model's forward method
+        bert_outputs = model(tokenized_essay)
+        # # Use the [CLS] token representation (first token) from last hidden state
+        cls_token_vector = bert_outputs.pooler_output
 
     return cls_token_vector
 
 
-def load_and_preprocess_dataset(csv_path, model, tokenizer) -> pl.DataFrame:
+def load_and_preprocess_dataset(csv_path) -> pl.DataFrame:
     logger.info(f"Loading dataset from {csv_path}...")
 
     relevant_columns = ["c1", "essay_as_single_utf8_string", "prompt"]
@@ -61,37 +66,26 @@ def load_and_preprocess_dataset(csv_path, model, tokenizer) -> pl.DataFrame:
         .head(MAX_SAMPLES if MAX_SAMPLES is not None else DEFAULT_MAX_SAMPLE_SIZE)
         .drop_nulls()
         .unique()
-        .with_columns(
-            pl.col("essay_as_single_utf8_string")
-            .map_batches(
-                lambda essays: pl.Series(
-                    (
-                        vectorize_essay(essay, idx, model, tokenizer)
-                        for idx, essay in enumerate(essays)
-                    )
-                ),
-                return_dtype=pl.Array(pl.Float32, 768),
-            )
-            .alias("essay_vector")
-        )
-        .collect()
     )
-    logger.info(f"Dataset loaded ({len(dataset)} lines):\n{dataset}")
+    logger.info(f"Dataset loaded from {csv_path}\n")
+
+    logger.info("Vectorizing dataset's essays...")
+    dataset = dataset.with_columns(
+        pl.col("essay_as_single_utf8_string")
+        .map_batches(
+            lambda essays: pl.Series(
+                (vectorize_essay(essay, idx) for idx, essay in enumerate(essays))
+            ),
+            return_dtype=pl.Array(pl.Float32, 768),
+        )
+        .alias("essay_vector")
+    ).collect()
+    logger.info(f"Dataset with {len(dataset)} samples:\n{dataset.head(10)}")
 
     return dataset
 
 
 def main():
-    # Initialize model
-    logger.info(f"Loading model from {MODEL_NAME}")
-    model = transformers.AutoModel.from_pretrained(MODEL_NAME, num_labels=1)
-    logger.info("model loaded")
-
-    # Initialize tokenizer
-    logger.info(f"Loading tokenizer from {MODEL_NAME}")
-    tokenizer = transformers.AutoTokenizer.from_pretrained(MODEL_NAME)
-    logger.info("tokenizer loaded")
-
     csv_dataset_file_path = (
         project_root
         / "generated_datasets"
@@ -116,9 +110,7 @@ def main():
             logger.error(f"Command error: {e.stderr}")
             raise
 
-    dataset_with_vectorized_essays = load_and_preprocess_dataset(
-        csv_dataset_file_path, model, tokenizer
-    )
+    dataset_with_vectorized_essays = load_and_preprocess_dataset(csv_dataset_file_path)
 
     generated_dataset_extensions = "parquet", "json"
     utils.save_dataset(

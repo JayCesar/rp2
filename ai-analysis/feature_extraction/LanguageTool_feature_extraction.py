@@ -1,41 +1,20 @@
-import concurrent.futures
-import gc
-import language_tool_python
-import logging
 import pathlib
-import polars as pl
-import spacy
-import subprocess
-import time
-import spacy
-import language_tool_python
-from threading import Lock
-import utils
 
+import language_tool_python
+import polars as pl
+import utils
+import feature_extraction
 
 logger = utils.logger
 
-# Global progress tracking
-progress_lock = Lock()
-completed_essays = 0
-
 # Configuration
-TEST_MODE = True  # Set to False to process all essays
-ROW_UPPER_LIMIT = (
-    100 if TEST_MODE else None
-)  # Process 25 essays in test mode, all otherwise
-BATCH_SIZE = 200  # Process essays in larger batches (memory optimized)
-MAX_WORKERS = 3  # Increase workers since we're using smaller models (~1.5GB total)
+MAX_SAMPLES = None  # Process 25 essays in test mode, all otherwise
 
+spacy_model_name = "pt_core_news_md"
 try:
-    logger.info("Loading spaCy model 'pt_core_news_lg'...")
-    nlp = spacy.load("pt_core_news_lg")
-    logger.info("spaCy model loaded successfully")
+    nlp = utils.spacy_model(spacy_model_name)
 except OSError:
-    logger.info("spaCy model not found. Downloading 'pt_core_news_lg'...")
-    subprocess.run(["python", "-m", "spacy", "download", "pt_core_news_lg"], check=True)
-    nlp = spacy.load("pt_core_news_lg")
-    logger.info("spaCy model downloaded and loaded successfully")
+    logger.error(f"Failed to load spaCy model {spacy_model_name}")
 
 logger.info("Initializing LanguageTool for Portuguese (Brazil)...")
 tool = language_tool_python.LanguageTool("pt-BR")
@@ -52,11 +31,11 @@ def essay_metrics(essay_data, total_essay_count):
     # Basic text statistics
     doc = nlp(essay)
     word_count = len([token for token in doc if not token.is_punct])
-    sentence_count = len([doc for doc in doc.sents])
+    sentences = list(doc.sents)
+    sentence_count = len(sentences)
 
     # LanguageTool error checking
     errors = tool.check(essay)
-
     # logger.info(f"Errors found in essay {essay_idx}: {errors}")
 
     error_counts = {}
@@ -69,14 +48,51 @@ def essay_metrics(essay_data, total_essay_count):
 
     total_error_count = sum(error_counts.values())
 
+    # Lexical diversity
+    lemmas = [token.lemma_ for token in doc if token.is_alpha]
+    features_spacy = {}
+    if len(lemmas) > 0:
+        features_spacy["LEXICAL_DIVERSITY"] = len(set(lemmas)) / len(lemmas)
+    else:
+        features_spacy["LEXICAL_DIVERSITY"] = 0
+
+    # Sentence average length
+    if sentence_count:
+        sentence_lengths = [len(sentence) for sentence in sentences]
+        features_spacy["AVERAGE_SENTENCE_LENGTH"] = sum(sentence_lengths) / len(
+            sentence_lengths
+        )
+    else:
+        features_spacy["AVERAGE_SENTENCE_LENGTH"] = 0
+
+    COLLOQUIALISMS = ["mano", "tá ligado", "tipo assim", "né", "daora"]
+    FORMAL_CONJUNCTIONS = [
+        "ademais",
+        "outrossim",
+        "dessa forma",
+        "portanto",
+        "entretanto",
+        "contudo",
+    ]
+
+    features_custom = {}
+    features_custom["COLLOQUALISM_COUNT"] = sum(
+        1 for exp in COLLOQUIALISMS if exp in essay
+    )
+    features_custom["FORMAL_CONJUNCTION_COUNT"] = sum(
+        1 for con in FORMAL_CONJUNCTIONS if con in essay
+    )
+
     return pl.DataFrame(
         error_counts
         | essay_data
         | {
-            "total_error_count": total_error_count,
-            "word_count": word_count,
-            "sentence_count": sentence_count,
+            "TOTAL_ERROR_COUNT": total_error_count,
+            "WORD_COUNT": word_count,
+            "SENTENCE_COUNT": sentence_count,
         }
+        | features_spacy
+        | features_custom
     )
 
 
@@ -87,9 +103,6 @@ def essay_token_count(encoded_essay):
 
 
 def main():
-    global completed_essays
-    completed_essays = 0  # Reset progress counter
-
     logger.info("Starting LanguageTool feature extraction process...")
 
     dataset_parquet_file_path = (
@@ -113,10 +126,10 @@ def main():
     )
 
     # Apply row limit if specified
-    if ROW_UPPER_LIMIT is not None:
-        logger.info(f"Applying row limit: {ROW_UPPER_LIMIT}")
-        dataset = dataset.head(ROW_UPPER_LIMIT)
-        logger.info(f"Applied row limit. Processing at most {ROW_UPPER_LIMIT} essays")
+    if MAX_SAMPLES is not None:
+        logger.info(f"Applying row limit: {MAX_SAMPLES}")
+        dataset = dataset.head(MAX_SAMPLES)
+        logger.info(f"Applied row limit. Processing at most {MAX_SAMPLES} essays")
     else:
         logger.info("No row limit applied. Processing all essays")
     dataset = dataset.collect()

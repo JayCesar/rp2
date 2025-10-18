@@ -37,8 +37,6 @@ from blstm import (
     ensure_dir,
     get_loss_fn,
 )
-from torch.amp import GradScaler
-from torch.cuda.amp import autocast
 from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau
 from torch.utils.data import DataLoader
 
@@ -96,16 +94,14 @@ class BiLSTMTrainer:
 
         # Setup mixed precision
         self.use_amp = train_config.use_amp and self.device.type == "cuda"
-        self.scaler = GradScaler(
-            "cuda", enabled=self.use_amp and train_config.amp_dtype == "fp16"
-        )
+        self.scaler = torch.GradScaler("cuda", enabled=self.use_amp)
 
         # Setup loss function
-        self.criterion = get_loss_fn("mse")
+        self.criterion = get_loss_fn("mae")
 
         # Training state
         self.current_epoch = 0
-        self.best_val_rmse = float("inf")
+        self.best_val_mae = float("inf")
         self.patience_counter = 0
         self.training_history: list[dict[str, float]] = []
 
@@ -156,7 +152,7 @@ class BiLSTMTrainer:
             )
             logger.info("Using ReduceLROnPlateau scheduler")
             return scheduler
-        elif self.train_config.scheduler == "onecycle":
+        if self.train_config.scheduler == "onecycle":
             # Calculate total steps for OneCycleLR
             total_steps = len(self.train_loader) * self.train_config.epochs
             scheduler = OneCycleLR(
@@ -167,11 +163,11 @@ class BiLSTMTrainer:
             )
             logger.info(f"Using OneCycleLR scheduler (total_steps: {total_steps})")
             return scheduler
-        elif self.train_config.scheduler == "none":
+        if self.train_config.scheduler == "none":
             logger.info("No scheduler used")
             return None
-        else:
-            raise ValueError(f"Unknown scheduler: {self.train_config.scheduler}")
+
+        raise ValueError(f"Unknown scheduler: {self.train_config.scheduler}")
 
     def _train_epoch(self) -> float:
         """Train for one epoch and return average loss."""
@@ -186,7 +182,7 @@ class BiLSTMTrainer:
             leave=False,
         )
 
-        for batch_idx, batch in enumerate(train_progress):
+        for batch in train_progress:
             # Move data to device
             tokens = batch["tokens"].to(self.device, non_blocking=True)
             lengths = batch["lengths"].to(self.device, non_blocking=True)
@@ -212,12 +208,9 @@ class BiLSTMTrainer:
 
             # Forward pass with AMP
             if self.use_amp:
-                amp_dtype = (
-                    torch.bfloat16
-                    if self.train_config.amp_dtype == "bf16"
-                    else torch.float16
-                )
-                with autocast(enabled=True, dtype=amp_dtype):
+                with torch.autocast(
+                    "cuda", enabled=True, dtype=self.train_config.amp_dtype
+                ):
                     predictions = self.model(tokens, lengths)
                     loss = self.criterion(predictions, targets_scaled)
             else:
@@ -279,12 +272,9 @@ class BiLSTMTrainer:
 
                 # Forward pass with AMP
                 if self.use_amp:
-                    amp_dtype = (
-                        torch.bfloat16
-                        if self.train_config.amp_dtype == "bf16"
-                        else torch.float16
-                    )
-                    with autocast(enabled=True, dtype=amp_dtype):
+                    with torch.autocast(
+                        "cuda", enabled=True, dtype=self.train_config.amp_dtype
+                    ):
                         predictions = self.model.predict_and_optionally_clamp(
                             tokens, lengths, clamp_for_metrics=True
                         )
@@ -337,7 +327,7 @@ class BiLSTMTrainer:
             "target_scaler_state": self.target_scaler.state_dict()
             if self.target_scaler
             else None,
-            "best_val_rmse": self.best_val_rmse,
+            "best_val_mae": self.best_val_mae,
             "training_history": self.training_history,
             "metrics": metrics or {},
         }
@@ -350,7 +340,7 @@ class BiLSTMTrainer:
         if is_best:
             best_path = Path(self.serialization_config.output_dir) / "best.pt"
             torch.save(checkpoint, best_path)
-            logger.info(f"New best model saved with val_rmse: {self.best_val_rmse:.6f}")
+            logger.info(f"New best model saved with val_mae: {self.best_val_mae:.6f}")
 
         logger.info(f"Checkpoint saved: {latest_path}")
 
@@ -374,14 +364,14 @@ class BiLSTMTrainer:
 
                 # Update scheduler (except OneCycleLR which updates per step)
                 if isinstance(self.scheduler, ReduceLROnPlateau):
-                    self.scheduler.step(val_metrics["rmse"])
+                    self.scheduler.step(val_metrics["mae"])
 
                 # Check for improvement
-                val_rmse = val_metrics["rmse"]
-                is_best = val_rmse < self.best_val_rmse
+                val_mae = val_metrics["mae"]
+                is_best = val_mae < self.best_val_mae
 
                 if is_best:
-                    self.best_val_rmse = val_rmse
+                    self.best_val_mae = val_mae
                     self.patience_counter = 0
                     best_metrics = val_metrics.copy()
                 else:
@@ -396,7 +386,7 @@ class BiLSTMTrainer:
                     "epoch": epoch + 1,
                     "train_loss": train_loss,
                     "val_loss": val_loss,
-                    "val_rmse": val_rmse,
+                    "val_rmse": val_mae,
                     "val_mae": val_metrics.get("mae", 0.0),
                     "val_step_accuracy": val_metrics.get("step_accuracy", 0.0),
                     "learning_rate": self.optimizer.param_groups[0]["lr"],
@@ -445,7 +435,7 @@ class BiLSTMTrainer:
 
             total_time = time.time() - start_time
             logger.info(f"Training completed in {total_time:.1f}s")
-            logger.info(f"Best validation RMSE: {self.best_val_rmse:.6f}")
+            logger.info(f"Best validation MAE: {self.best_val_mae:.6f}")
 
             return best_metrics
 
@@ -482,7 +472,7 @@ class BiLSTMTrainer:
 
         # Load training state
         self.current_epoch = checkpoint.get("epoch", 0)
-        self.best_val_rmse = checkpoint.get("best_val_rmse", float("inf"))
+        self.best_val_mae = checkpoint.get("best_val_mae", float("inf"))
         self.training_history = checkpoint.get("training_history", [])
 
         logger.info(f"Checkpoint loaded from epoch {self.current_epoch}")
@@ -511,95 +501,95 @@ def create_trainer_from_configs(
     )
 
 
-# Example usage function
-def example_training_workflow() -> tuple[BiLSTMTrainer, dict[str, float]]:
-    """Example of how to use the BiLSTMTrainer."""
-    import numpy as np
-    from blstm import (
-        EmbeddingSequenceDataset,
-        TargetScaler,
-        collate_batch,
-        get_device,
-        set_seed,
-        split_dataset,
-    )
-    from torch.utils.data import DataLoader
-
-    # Setup
-    device = get_device("auto")
-    set_seed(42)
-
-    # Create synthetic dataset (replace with your real data)
-    arrays = []
-    scores = []
-    valid_scores = [0, 40, 80, 120, 160, 200]
-
-    for i in range(1000):  # Larger dataset for better training
-        seq_len = np.random.randint(10, 500)
-        embedding = np.random.randn(seq_len, 768).astype(np.float32)
-        score = float(np.random.choice(valid_scores))
-        arrays.append(embedding)
-        scores.append(score)
-
-    dataset = EmbeddingSequenceDataset.from_memory(arrays, scores)
-    train_dataset, val_dataset, _ = split_dataset(dataset, 0.2, 0.0, seed=42)
-
-    # Create data loaders
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=32,
-        shuffle=True,
-        collate_fn=lambda batch: collate_batch(batch, 0.0),
-        num_workers=2,
-        pin_memory=True,
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=32,
-        shuffle=False,
-        collate_fn=lambda batch: collate_batch(batch, 0.0),
-        num_workers=2,
-        pin_memory=True,
-    )
-
-    # Setup target scaler
-    all_targets = [record.score for record in dataset.records]
-    target_scaler = TargetScaler("minmax")
-    target_scaler.fit(np.array(all_targets))
-
-    # Create configs
-    model_config = ModelConfig(
-        hidden_size=256, num_layers=2, dropout=0.1, aggregation="last"
-    )
-
-    train_config = TrainConfig(
-        epochs=10,
-        batch_size=32,
-        lr=2e-4,
-        scheduler="plateau",
-        early_stopping_patience=3,
-        device="auto",
-    )
-
-    # Create model
-    model = BiLSTMRegressor(model_config)
-
-    # Create trainer
-    trainer = create_trainer_from_configs(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        model_config=model_config,
-        train_config=train_config,
-        target_scaler=target_scaler,
-        output_dir="runs/example_training",
-    )
-
-    # Train the model
-    best_metrics = trainer.train()
-
-    logger.info(f"Training completed! Best metrics: {best_metrics}")
-    return trainer, best_metrics
+# # Example usage function
+# def example_training_workflow() -> tuple[BiLSTMTrainer, dict[str, float]]:
+#     """Example of how to use the BiLSTMTrainer."""
+#     import numpy as np
+#     from blstm import (
+#         EssayDataset,
+#         TargetScaler,
+#         collate_batch,
+#         get_device,
+#         set_seed,
+#         split_dataset,
+#     )
+#     from torch.utils.data import DataLoader
+#
+#     # Setup
+#     device = get_device("auto")
+#     set_seed(42)
+#
+#     # Create synthetic dataset (replace with your real data)
+#     arrays = []
+#     scores = []
+#     valid_scores = [0, 40, 80, 120, 160, 200]
+#
+#     for i in range(1000):  # Larger dataset for better training
+#         seq_len = np.random.randint(10, 500)
+#         embedding = np.random.randn(seq_len, 768).astype(np.float32)
+#         score = float(np.random.choice(valid_scores))
+#         arrays.append(embedding)
+#         scores.append(score)
+#
+#     dataset = EssayDataset(pl.DataFrame(arrays, scores))
+#     train_dataset, val_dataset, _ = split_dataset(dataset, 0.2, 0.0, seed=42)
+#
+#     # Create data loaders
+#     train_loader = DataLoader(
+#         train_dataset,
+#         batch_size=32,
+#         shuffle=True,
+#         collate_fn=lambda batch: collate_batch(batch, 0.0),
+#         num_workers=2,
+#         pin_memory=True,
+#     )
+#     val_loader = DataLoader(
+#         val_dataset,
+#         batch_size=32,
+#         shuffle=False,
+#         collate_fn=lambda batch: collate_batch(batch, 0.0),
+#         num_workers=2,
+#         pin_memory=True,
+#     )
+#
+#     # Setup target scaler
+#     all_targets = [record.score for record in dataset.records]
+#     target_scaler = TargetScaler("minmax")
+#     target_scaler.fit(np.array(all_targets))
+#
+#     # Create configs
+#     model_config = ModelConfig(
+#         hidden_size=256, num_layers=2, dropout=0.1, aggregation="last"
+#     )
+#
+#     train_config = TrainConfig(
+#         epochs=10,
+#         batch_size=32,
+#         lr=2e-4,
+#         scheduler="plateau",
+#         early_stopping_patience=3,
+#         device="auto",
+#     )
+#
+#     # Create model
+#     model = BiLSTMRegressor(model_config)
+#
+#     # Create trainer
+#     trainer = create_trainer_from_configs(
+#         model=model,
+#         train_loader=train_loader,
+#         val_loader=val_loader,
+#         model_config=model_config,
+#         train_config=train_config,
+#         target_scaler=target_scaler,
+#         output_dir="runs/example_training",
+#     )
+#
+#     # Train the model
+#     best_metrics = trainer.train()
+#
+#     logger.info(f"Training completed! Best metrics: {best_metrics}")
+#     return trainer, best_metrics
 
 
 if __name__ == "__main__":
@@ -609,7 +599,6 @@ if __name__ == "__main__":
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
     )
 
-    # Run example
-    trainer, metrics = example_training_workflow()
-    print(f"Final metrics: {metrics}")
-
+    # # Run example
+    # trainer, metrics = example_training_workflow()
+    # print(f"Final metrics: {metrics}")

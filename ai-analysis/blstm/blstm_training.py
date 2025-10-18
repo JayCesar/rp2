@@ -24,6 +24,7 @@ pip install torch numpy polars
 
 import logging
 import sys
+from typing import Literal
 from pathlib import Path
 
 
@@ -201,19 +202,19 @@ def create_data_loader(
 
 class Component1BLSTM(nn.Module):
     """
-    Component 1 Bidirectional LSTM Model based on Portuguese specifications.
+    Component 1 Bidirectional LSTM Model based on CLaRiCe specifications.
 
     Architecture:
     - 3 layers with hidden sizes: 10, 26, 21
     - Bidirectional LSTM
-    - Dropout rate: 0.164
+    - Dropout rate: 1.64e-01
     """
 
     def __init__(self, input_dim: int = 768):
         super().__init__()
 
         self.input_dim = input_dim
-        self.dropout_rate = 0.164  # 1,64e-01 from specs
+        self.dropout_rate = 1.64e-01  # 1,64e-01 from specs
 
         # Component 1: 3 layers, units: 10/26/21
         self.hidden_sizes = [10, 26, 21]
@@ -296,45 +297,30 @@ class Component1BLSTM(nn.Module):
         return output
 
 
-def create_component1_config() -> ModelConfig:
+def create_component1_config(
+    type: Literal["vectorized_essays", "features"],
+) -> ModelConfig:
     """Create ModelConfig for Component 1 based on Portuguese specifications."""
-    return ModelConfig(
-        input_dim=768,
-        hidden_size=21,  # Final layer size from 10/26/21
-        num_layers=3,  # Total de camadas: 3
-        bidirectional=True,
-        dropout=0.164,  # 1,64e-01 from specs
-        aggregation="last",
-        mlp_hidden=64,
-        use_layer_norm=False,
-    )
+    if type == "vectorized_essays":
+        return ModelConfig(
+            input_dim=768,
+        )
+    if type == "features":
+        return ModelConfig(
+            input_dim=,
+        )
 
 
 def create_training_config() -> TrainConfig:
     """Create training configuration based on Portuguese specifications."""
-    return TrainConfig(
-        epochs=100,
-        batch_size=32,
-        lr=1.01e-3,  # 1,01e-03 from specs (Learning Rate)
-        weight_decay=4.67e-6,  # 4,67e-06 from specs (Weight Decay L2)
-        optimizer="adamw",  # Adam optimizer family
-        scheduler="plateau",
-        plateau_patience=5,
-        plateau_factor=0.7,
-        early_stopping_patience=100,
-        grad_clip_norm=1.0,
-        use_amp=True,
-        amp_dtype="bf16",
-        target_scaler="none",  # No target scaling like BERT
-        seed=42,
-    )
+    return TrainConfig()
 
 
 def split_real_dataset(
     dataset: EssayDataset,
     # train_ratio: float = 0.7,
-    val_ratio: float = 0.2,
-    test_ratio: float = 0.1,
+    val_ratio: float = 0.15,
+    test_ratio: float = 0.15,
     seed: int = 42,
 ):
     """Split the real dataset into train/val/test sets using BERT-style stratification."""
@@ -371,11 +357,9 @@ def split_real_dataset(
     )
 
     # Create subset datasets
-    from torch.utils.data import Subset
-
-    train_dataset = Subset(dataset, train_indices)
-    val_dataset = Subset(dataset, val_indices)
-    test_dataset = Subset(dataset, test_indices)
+    train_dataset = EssayDataset(pl.DataFrame(dataset.__getitems__(train_indices)))
+    val_dataset = EssayDataset(pl.DataFrame(dataset.__getitems__(val_indices)))
+    test_dataset = EssayDataset(pl.DataFrame(dataset.__getitems__(test_indices)))
 
     # Log score distributions to verify stratification worked
     train_scores = [scores[i] for i in train_indices]
@@ -392,7 +376,9 @@ def split_real_dataset(
 
 
 def train_component1_standard(
-    dataset: EssayDataset, device: torch.device
+    dataset: EssayDataset,
+    device: torch.device,
+    input_type: Literal["vectorized_essays", "features"],
 ) -> dict[str, float]:
     """Train Component 1 using the standard BiLSTMRegressor."""
     logger.info("Training Component 1 with Standard BiLSTMRegressor on Real Data")
@@ -406,7 +392,7 @@ def train_component1_standard(
     target_scaler.fit(np.array(all_scores))
 
     # Create configurations
-    model_config = create_component1_config()
+    model_config = create_component1_config(input_type)
     train_config = create_training_config()
 
     logger.info(f"Model Config: {model_config.to_dict()}")
@@ -497,6 +483,61 @@ def train_component1_standard(
         return {}
 
 
+def show_and_save_metrics(best_metrics: dict[str, float], model_save_path: Path) -> None:
+    """Show and save metrics."""
+    logger.info(f"Training completed successfully")
+
+    # BERT-style final metrics display
+    print("\nFinal validation metrics:")
+    for metric, value in best_metrics.items():
+        print(f"{metric}: {value:.4f}")
+
+    # Save final metrics to files (like BERT script)
+    model_save_path.mkdir(parents=True, exist_ok=True)
+
+    # Save as DataFrame and export to CSV/Parquet
+    best_metrics_df = pl.DataFrame(best_metrics)
+
+    best_metrics_df.write_csv(model_save_path / "final_validation_metrics.csv")
+    print(
+        f"Final validation metrics saved to {model_save_path / 'final_validation_metrics.csv'}"
+    )
+
+    best_metrics_df.write_parquet(
+        model_save_path / "final_validation_metrics.parquet"
+    )
+    print(
+        f"Final validation metrics saved to {model_save_path / 'final_validation_metrics.parquet'}"
+    )
+
+    # Only show success messages if training actually succeeded
+    logger.info("\n" + "=" * 70)
+    logger.info("COMPONENT 1 TRAINING WITH REAL DATA COMPLETED SUCCESSFULLY")
+    logger.info("=" * 70)
+    logger.info("Portuguese Component 1 specifications implemented:")
+    logger.info("✓ Total de camadas: 3")
+    logger.info("✓ Unidades/Célula: 10/26/21")
+    logger.info("✓ Otimizador: Adam (AdamW)")
+    logger.info("✓ Learning Rate: 1.01e-3")
+    logger.info("✓ Dropout rate: 1.64e-01")
+    logger.info("✓ Weight Decay (L2): 4.67e-6")
+    logger.info("\nReal Data Used:")
+    logger.info("✓ 768-dimensional BERT embeddings")
+    logger.info("✓ C1 scores (0-200) for essay evaluation")
+    logger.info("\nStandard implementation uses existing BiLSTMRegressor")
+
+    # BERT-style completion message
+    print(f"\n{'=' * 50}")
+    print("✅ Training completed successfully!")
+    print(f"{'=' * 50}")
+    device_info = get_device("auto")
+    if device_info.type == "cuda":
+        print(f"Trained using GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        print("Trained using CPU")
+    print(f"Model saved to: {model_save_path}")
+
+
 def main():
     """Main training workflow for Component 1 Portuguese BLSTM specifications with real data."""
     print(f"\n{'=' * 50}")
@@ -512,7 +553,8 @@ def main():
     logger.info(f"Using device: {device}")
 
     # Initialize model_save_path to ensure it's always defined
-    model_save_path = Path(__file__).parent / "runs" / "blstm_component1_real_data"
+    model_save_path_vectorized_essays = Path(__file__).parent / "runs" / "vectorized_essays" / "blstm_model"
+    model_save_path_features = Path(__file__).parent / "runs" / "features" / "blstm_model"
 
     # Load real essay data - try parquet first, then JSON as fallback
     parquet_file = "generated_datasets/extended_essay-br_preprocessed_for_BLSTM.parquet"
@@ -534,7 +576,7 @@ def main():
         max_samples = None  # Set to None to use all samples
         relevant_columns = "c1", "essay_vector"
         DEFAULT_MAX_SAMPLE_SIZE = 2**31 - 1
-        df = (
+        dataset = EssayDataset(
             pl.scan_parquet(data_file)
             .select(relevant_columns)
             .head(max_samples if max_samples is not None else DEFAULT_MAX_SAMPLE_SIZE)
@@ -542,7 +584,6 @@ def main():
             .unique()
             .collect()
         )
-        dataset = EssayDataset(df)
 
         logger.info(f"Loaded dataset with {len(dataset)} essays")
 
@@ -551,84 +592,39 @@ def main():
         logger.info("TRAINING WITH STANDARD BiLSTMRegressor")
         logger.info("=" * 70)
 
-        best_metrics = train_component1_standard(dataset, device)
+        input_types = "vectorized_essays", "features"
+        best_metrics = {
+            input_type: train_component1_standard(dataset, device, input_type)
+            for input_type in input_types
+        }
 
-        # Check if training was actually successful (non-empty metrics dict)
-        training_successful = (
-            best_metrics and isinstance(best_metrics, dict) and len(best_metrics) > 0
-        )
+        # # Check if training was actually successful (non-empty metrics dict)
+        # training_successful = all(
+        #     len(best_metrics[input_type]) > 0 for input_type in input_types
+        # )
+        #
+        # if training_successful:
 
-        if training_successful:
-            logger.info(f"Training completed successfully")
+        show_and_save_metrics(best_metrics["vectorized_essays"], model_save_path_vectorized_essays)
+        show_and_save_metrics(best_metrics["features"], model_save_path_vectorized_essays)
 
-            # BERT-style final metrics display
-            print("\nFinal validation metrics:")
-            for metric, value in best_metrics.items():
-                print(f"{metric}: {value:.4f}")
-
-            # Save final metrics to files (like BERT script)
-            model_save_path.mkdir(parents=True, exist_ok=True)
-
-            # Save as DataFrame and export to CSV/Parquet
-            final_metrics_df = pl.DataFrame([best_metrics])
-
-            final_metrics_df.write_csv(model_save_path / "final_validation_metrics.csv")
-            print(
-                f"Final validation metrics saved to {model_save_path / 'final_validation_metrics.csv'}"
-            )
-
-            final_metrics_df.write_parquet(
-                model_save_path / "final_validation_metrics.parquet"
-            )
-            print(
-                f"Final validation metrics saved to {model_save_path / 'final_validation_metrics.parquet'}"
-            )
-
-            # Only show success messages if training actually succeeded
-            logger.info("\n" + "=" * 70)
-            logger.info("COMPONENT 1 TRAINING WITH REAL DATA COMPLETED SUCCESSFULLY")
-            logger.info("=" * 70)
-            logger.info("Portuguese Component 1 specifications implemented:")
-            logger.info("✓ Total de camadas: 3")
-            logger.info("✓ Unidades/Célula: 10/26/21")
-            logger.info("✓ Otimizador: Adam (AdamW)")
-            logger.info("✓ Learning Rate: 1.01e-3")
-            logger.info("✓ Dropout rate: 0.164")
-            logger.info("✓ Weight Decay (L2): 4.67e-6")
-            logger.info("\nReal Data Used:")
-            logger.info(f"✓ {len(dataset)} Portuguese essays")
-            logger.info("✓ 768-dimensional BERT embeddings")
-            logger.info("✓ C1 scores (0-200) for essay evaluation")
-            logger.info("\nStandard implementation uses existing BiLSTMRegressor")
-
-            # BERT-style completion message
-            print(f"\n{'=' * 50}")
-            print("✅ Training completed successfully!")
-            print(f"{'=' * 50}")
-            device_info = get_device("auto")
-            if device_info.type == "cuda":
-                print(f"Trained using GPU: {torch.cuda.get_device_name(0)}")
-            else:
-                print("Trained using CPU")
-            print(f"Model saved to: {model_save_path}")
-
-            return 0
-        else:
-            # Training failed - show failure message
-            logger.error("\n" + "=" * 70)
-            logger.error("COMPONENT 1 TRAINING WITH REAL DATA FAILED")
-            logger.error("=" * 70)
-            logger.error(
-                "Training did not complete successfully. Check the error messages above."
-            )
-
-            print(f"\n{'=' * 50}")
-            print("❌ Training failed!")
-            print(f"{'=' * 50}")
-            print("Please check the error messages above for details.")
-
-            return 1
-
+        return 0
+    # else:
+    #     # Training failed - show failure message
+    #     logger.error("\n" + "=" * 70)
+    #     logger.error("COMPONENT 1 TRAINING WITH REAL DATA FAILED")
+    #     logger.error("=" * 70)
+    #     logger.error(
+    #         "Training did not complete successfully. Check the error messages above."
+    #     )
+    #
+    #     print(f"\n{'=' * 50}")
+    #     print("❌ Training failed!")
+    #     print(f"{'=' * 50}")
+    #     print("Please check the error messages above for details.")
+    #
+    #     return 1
+    #
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")
         return 1

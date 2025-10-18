@@ -1,13 +1,15 @@
 import pathlib
-import re
 
 import polars as pl
 import utils
 
 logger = utils.logger
 
-spacy_model_name = "pt_core_news_lg"
-nlp = utils.spacy_model(spacy_model_name)
+spacy_model_name = "pt_core_news_md"
+try:
+    nlp = utils.spacy_model(spacy_model_name)
+except OSError:
+    logger.error(f"Failed to load spaCy model {spacy_model_name}")
 
 
 def preprocess_text(text: str, idx: int) -> str:
@@ -24,13 +26,13 @@ def preprocess_text(text: str, idx: int) -> str:
 
     text = utils.essay_line_to_single_utf8_string(text)
 
-    # Remove URLs, emails, and special patterns
-    text = re.sub(
-        r"http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+",
-        "",
-        text,
-    )
-    text = re.sub(r"\S+@\S+", "", text)
+    # # Remove URLs, emails, and special patterns
+    # text = re.sub(
+    #     r"http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+",
+    #     "",
+    #     text,
+    # )
+    # text = re.sub(r"\S+@\S+", "", text)
 
     # Process with spaCy
     doc = nlp(text)
@@ -43,7 +45,6 @@ def preprocess_text(text: str, idx: int) -> str:
             not token.is_stop
             and not token.is_punct
             and not token.is_space
-            and not token.is_punct
             and len(token.text.strip()) > 1
         ):
             # Use lemma if available, otherwise use original token
