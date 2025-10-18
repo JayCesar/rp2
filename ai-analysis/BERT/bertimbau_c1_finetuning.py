@@ -1,7 +1,6 @@
 import pathlib
 import sys
 
-
 import numpy as np
 import polars as pl
 import scipy.stats
@@ -12,6 +11,7 @@ import torch.nn as nn
 import torch.utils.data
 import tqdm
 import transformers
+from feature_extraction import utils
 
 # Add the project root to sys.path to allow absolute imports
 project_root = pathlib.Path(__file__).parent.parent.parent
@@ -22,8 +22,6 @@ if str(project_root) not in sys.path:
 ai_analysis_path = pathlib.Path(__file__).parent.parent
 if str(ai_analysis_path) not in sys.path:
     sys.path.insert(0, str(ai_analysis_path))
-
-from feature_extraction import utils
 
 logger = utils.logger
 
@@ -133,9 +131,9 @@ class BERTimbauForC1Prediction(nn.Module):
         self.dropout = nn.Dropout(dropout_prob)
         self.regressor = nn.Linear(self.bert.config.hidden_size, num_labels)
 
-        # Initialize weights with Xavier/Glorot initialization for better training
-        nn.init.xavier_uniform_(self.regressor.weight)
-        nn.init.zeros_(self.regressor.bias)
+        # # Initialize weights with Xavier/Glorot initialization for better training
+        # nn.init.xavier_uniform_(self.regressor.weight)
+        # nn.init.zeros_(self.regressor.bias)
 
     def forward(
         self,
@@ -188,7 +186,6 @@ def load_and_prepare_data(
         pl.DataFrame with vectorized_essays, essay prompts, and c1 scores
     """
     logger.info(f"Loading dataset from {csv_path}")
-    print(f"[DEBUG] Loading dataset from {csv_path}")
 
     def vectorize_essay(essay, idx, total_essays, model, tokenizer):
         tokenized_essay = tokenizer(
@@ -200,7 +197,7 @@ def load_and_prepare_data(
         )
 
         if idx % 10 == 0:
-            print(f"[DEBUG] vectorize_essay: essay {idx} / {total_essays} =\n{essay}")
+            logger.info(f"vectorize_essay: essay {idx} / {total_essays} =\n{essay}")
 
         with torch.no_grad():
             # Get BERT embeddings using the underlying BERT model
@@ -209,9 +206,14 @@ def load_and_prepare_data(
                 input_ids=tokenized_essay["input_ids"],
                 attention_mask=tokenized_essay["attention_mask"],
             )
-            # Use the [CLS] token representation (first token) from last hidden state
-            all_token_vectors = bert_outputs.last_hidden_state
-            cls_token_vector = all_token_vectors[0, 0]  # [batch_size=1, token_0=CLS]
+            # # Use the [CLS] token representation (first token) from last hidden state
+            # print(bert_outputs)
+
+            # Use the [CLS] token representation (first token)
+            cls_token_vector = bert_outputs.pooler_output
+            print(cls_token_vector)
+            # all_token_vectors = bert_outputs.last_hidden_state
+            # cls_token_vector = all_token_vectors[0, 0]  # [batch_size=1, token_0=CLS]
 
         return cls_token_vector
 
@@ -245,6 +247,20 @@ def load_and_prepare_data(
     )
 
     print(df)
+
+    c1_scores = df["c1"].to_numpy()
+
+    global C1_MEAN
+    C1_MEAN = c1_scores.mean()
+
+    global C1_STD
+    C1_STD = c1_scores.std()
+
+    global C1_MIN
+    C1_MIN = c1_scores.min()
+
+    global C1_MAX
+    C1_MAX = c1_scores.max()
 
     logger.info(f"Dataset loaded with {len(df)} samples")
 

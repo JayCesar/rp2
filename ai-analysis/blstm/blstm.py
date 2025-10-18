@@ -86,10 +86,10 @@ class ModelConfig:
     """Configuration for the BiLSTM model architecture."""
 
     input_dim: int = 768
-    hidden_size: int = 256
-    num_layers: int = 2
+    hidden_sizes: list[int] = [10, 26, 21]
+    num_layers: int = 3
     bidirectional: bool = True
-    dropout: float = 0.1
+    dropout: float = 1.64e-01
     aggregation: Literal["last", "mean", "max", "attn"] = "last"
     mlp_hidden: int | None = 256
     use_layer_norm: bool = False
@@ -137,22 +137,22 @@ class DataConfig:
 class TrainConfig:
     """Configuration for training parameters."""
 
-    epochs: int = 20
+    epochs: int = 25
     batch_size: int = 32
-    lr: float = 2e-4
-    weight_decay: float = 1e-4
-    optimizer: Literal["adamw"] = "adamw"
-    scheduler: Literal["plateau", "onecycle", "none"] = "plateau"
-    plateau_patience: int = 3
+    lr: float = 1.01e-03
+    weight_decay: float = 4.67e-06
+    optimizer: Literal["adam", "adamw"] = "adamw"
+    scheduler: Literal["plateau", "onecycle", "none"] = "none"
+    plateau_patience: int = 2
     plateau_factor: float = 0.5
     onecycle_pct_start: float = 0.1
     grad_clip_norm: float = 1.0
-    early_stopping_patience: int = 5
+    early_stopping_patience: int = 3
     seed: int = 42
     device: Literal["auto", "cpu", "cuda", "mps"] = "auto"
     use_amp: bool = True
-    amp_dtype: Literal["bf16", "fp16"] = "bf16"
-    compile: bool = False
+    amp_dtype: torch.dtype = torch.bfloat16
+    # compile: bool = False
     target_scaler: Literal["none", "minmax", "standard"] = "minmax"
 
     def to_dict(self) -> dict[str, str | int | float | bool]:
@@ -392,7 +392,7 @@ class EssayDataset(Dataset):
         return len(self.records)
 
     def __getitem__(self, idx):
-        return self.records.row(idx).to_dicts()
+        return self.records.row(idx, named=True)
 
     def __getitems__(self, indices):
         return (
@@ -488,18 +488,18 @@ class BiLSTMRegressor(nn.Module):
         # LSTM layers
         self.lstm = nn.LSTM(
             input_size=config.input_dim,
-            hidden_size=config.hidden_size,
+            hidden_size=config.hidden_sizes,
             num_layers=config.num_layers,
             batch_first=True,
             bidirectional=config.bidirectional,
             dropout=config.dropout if config.num_layers > 1 else 0.0,
         )
 
-        # Aggregation layer
         lstm_output_size = (
-            config.hidden_size * 2 if config.bidirectional else config.hidden_size
+            config.hidden_sizes * 2 if config.bidirectional else config.hidden_sizes
         )
 
+        # Aggregation layer
         if config.aggregation == "attn":
             self.aggregation = AttentionAggregation(lstm_output_size)
         else:
@@ -680,7 +680,7 @@ class MetricsAccumulator:
             pearson_corr = 0.0
 
         return {
-            "loss": float(mse),  # Use MSE as loss for compatibility with BERT script
+            "loss": float(mse),  # Use MAE as loss like the CLaRiCe paper
             "mae": float(mae),
             "mse": float(mse),
             "rmse": float(rmse),
@@ -725,14 +725,16 @@ class MetricsAccumulator:
         ]
 
 
-def get_loss_fn(loss_type: str = "mse") -> nn.Module:
+def get_loss_fn(loss_type: Literal["mae", "mse", "huber"] = "mae") -> nn.Module:
     """Get loss function by name."""
+    if loss_type == "mae":
+        return nn.L1Loss()
     if loss_type == "mse":
         return nn.MSELoss()
-    elif loss_type == "huber":
+    if loss_type == "huber":
         return nn.HuberLoss()
-    else:
-        raise ValueError(f"Unknown loss type: {loss_type}")
+
+    # raise ValueError(f"Unknown loss type: {loss_type}")
 
 
 # Quick evaluation functions
@@ -755,7 +757,7 @@ def evaluate_model(
 
             # Get predictions (with clamping for metrics)
             if device.type == "cuda":
-                with autocast(enabled=True):
+                with torch.autocast("cuda", enabled=True):
                     preds = model.predict_and_optionally_clamp(
                         tokens, lengths, clamp_for_metrics=True
                     )
@@ -790,4 +792,3 @@ def create_synthetic_dataset(
         scores.append(score)
 
     return EssayDataset.from_memory(arrays, scores)
-
