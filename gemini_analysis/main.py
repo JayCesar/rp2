@@ -6,7 +6,7 @@ from . import gemini_analysis
 try:
     
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format='%(levelname)s - [%(name)s] - %(message)s'
     )
 

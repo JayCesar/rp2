@@ -33,7 +33,6 @@ def json_dealer(path: str, operation: str, new_data: Dict = None) -> Dict | bool
         try:
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(new_data, f, indent=4, ensure_ascii=False)
-            print(f"Dados salvos com sucesso em '{path}'.")
             return True
         except Exception as e:
             print(f"Erro ao escrever no arquivo '{path}': {e}")

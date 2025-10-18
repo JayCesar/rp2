@@ -1,7 +1,5 @@
-import logging
+import logging, os, concurrent.futures, threading
 from tqdm import tqdm
-import concurrent.futures
-import threading
 
 from typing import Dict, List
 
@@ -20,17 +18,21 @@ from .shared.json import json_dealer
 # ========================================== #
 #  CONFIGURAÇÕES DE PERFORMANCE E SEGURANÇA  #
 # ========================================== #
-MAX_WORKERS = 50 
+MAX_WORKERS = 200 
 FILE_LOCK = threading.Lock()
+
+CONTROLE_DIR = os.path.join("gemini_analysis", "controle")
+AVALIACOES_PATH = os.path.join(CONTROLE_DIR, "avaliacoes.json")
+IDS_AVALIADOS_PATH = os.path.join(CONTROLE_DIR, "lista_avaliadas.json")
 # ========================================== #
 
 def run():
 
     dict_redacoes: Dict[int, Redacao] = create_redacoes_dict()
 
-    avaliacoes_redacoes: Dict = json_dealer("gemini_analysis/controle/avaliacoes.json", 'read')
-    ids_avaliados: Dict[str, List[int]] = json_dealer("gemini_analysis/controle/lista_avaliadas.json", 'read')
-    
+    avaliacoes_redacoes: Dict = json_dealer(AVALIACOES_PATH, 'read')
+    ids_avaliados: Dict[str, List[int]] = json_dealer(IDS_AVALIADOS_PATH, 'read')
+
     from .keys import genai_key
     genai_client = genai.init(api_key=genai_key)
 
@@ -88,14 +90,14 @@ def _avalia_redacao_thread(id_redacao: int, redacao_obj: Redacao, genai_client, 
         with FILE_LOCK:
             avaliacoes_redacoes[id_redacao] = redacao_obj.to_dict()
             
-            is_response_save = json_dealer("gemini_analysis/controle/avaliacoes.json", "write", avaliacoes_redacoes)
+            is_response_save = json_dealer(AVALIACOES_PATH, "write", avaliacoes_redacoes)
             
             if not is_response_save:
                 logging.error(f"Redação {id_redacao} - Response não pode ser salvo. Perda de dados potencial.")
                 return
 
             ids_avaliados["redacoes_avaliadas"].extend(current_ids_processed)
-            json_dealer("gemini_analysis/controle/lista_avaliadas.json", "write", ids_avaliados)
+            json_dealer(IDS_AVALIADOS_PATH, "write", ids_avaliados)
              
         if not is_retry: logging.info(f"Redação {id_redacao} - Avaliada com sucesso!")
 

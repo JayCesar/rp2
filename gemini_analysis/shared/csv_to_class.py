@@ -1,4 +1,4 @@
-import logging
+import logging, os
 import pandas as pd
 
 from typing import Dict, Optional
@@ -7,8 +7,8 @@ from ..models.Redacao import Redacao
 def create_redacoes_dict(num_amostras: Optional[int] = None) -> Dict[int, Redacao]:
 
     try:
-        extended_essay_br = pd.read_csv('database/extended_essay-br.csv')
-        info_redacoes = pd.read_csv('database/prompts.csv')
+        extended_essay_br = pd.read_csv(os.path.join('database', 'extended_essay-br.csv'))
+        info_redacoes = pd.read_csv(os.path.join('database', 'prompts.csv'))
         
         if 'id' in info_redacoes.columns:
             info_redacoes = info_redacoes.set_index('id')
