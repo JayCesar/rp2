@@ -1,7 +1,7 @@
 import json
 from typing import Dict
 
-def json_dealer(path: str, operation: str, new_data: Dict = None):
+def json_dealer(path: str, operation: str, new_data: Dict = None) -> Dict | bool:
     """
     Uma função para ler ou escrever dados em um arquivo JSON.
 

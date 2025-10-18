@@ -1,12 +1,12 @@
-from typing import Dict
+from ..models.Redacao import Redacao
 
-def generate_redacao_input(redacao_dict: Dict, prompt_template: str) -> str:
+def generate_redacao_input(redacao_obj: Redacao, prompt_template: str) -> str:
 
     prompt_input: str = prompt_template.format(
-        enunciado_titulo=redacao_dict['enunciado_titulo'],
-        enunciado=redacao_dict['enunciado'],
-        titulo=redacao_dict['titulo'],
-        texto=redacao_dict['texto']
+        enunciado_titulo=redacao_obj.enunciado_titulo,
+        enunciado=redacao_obj.enunciado,
+        titulo=redacao_obj.titulo,
+        texto=redacao_obj.texto
     )
     
     return prompt_input
