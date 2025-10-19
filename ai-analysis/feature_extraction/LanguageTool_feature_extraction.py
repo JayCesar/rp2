@@ -1,27 +1,43 @@
-import concurrent.futures
-import language_tool_python
-import logging
 import pathlib
+
+import language_tool_python
 import polars as pl
-import spacy
+import utils
+import feature_extraction
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = utils.logger
 
-ROW_UPPER_LIMIT = None  # Set to None to use all samples
+# Configuration
+MAX_SAMPLES = None  # Process 25 essays in test mode, all otherwise
+
+spacy_model_name = "pt_core_news_md"
+try:
+    nlp = utils.spacy_model(spacy_model_name)
+except OSError:
+    logger.error(f"Failed to load spaCy model {spacy_model_name}")
+
+logger.info("Initializing LanguageTool for Portuguese (Brazil)...")
+tool = language_tool_python.LanguageTool("pt-BR")
+logger.info("LanguageTool initialized successfully")
 
 
-def essay_metrics(essay, essay_c1_score, essay_idx, nlp, tool):
+def essay_metrics(essay_data, total_essay_count):
+    essay_id = essay_data["essay_id"]
+    if essay_id % 10 == 0:
+        logger.info(f"Processing essay {essay_id}/{total_essay_count}...")
+
+    essay = essay_data["essay_as_single_utf8_string"]
+
     # Basic text statistics
     doc = nlp(essay)
     word_count = len([token for token in doc if not token.is_punct])
-    sentence_count = len(list(doc.sents))
+    sentences = list(doc.sents)
+    sentence_count = len(sentences)
 
-    if essay_idx % 25 == 0:
-        print(f"[DEBUG] essay_idx: {essay_idx}")
-
+    # LanguageTool error checking
     errors = tool.check(essay)
+    # logger.info(f"Errors found in essay {essay_idx}: {errors}")
+
     error_counts = {}
     for error in errors:
         error_category = error.category
@@ -30,18 +46,53 @@ def essay_metrics(essay, essay_c1_score, essay_idx, nlp, tool):
         else:
             error_counts[error_category] = 1
 
-    total_error_count = 0
-    for error_count in error_counts.values():
-        total_error_count += error_count
+    total_error_count = sum(error_counts.values())
 
-    return pl.LazyFrame(
+    # Lexical diversity
+    lemmas = [token.lemma_ for token in doc if token.is_alpha]
+    features_spacy = {}
+    if len(lemmas) > 0:
+        features_spacy["LEXICAL_DIVERSITY"] = len(set(lemmas)) / len(lemmas)
+    else:
+        features_spacy["LEXICAL_DIVERSITY"] = 0
+
+    # Sentence average length
+    if sentence_count:
+        sentence_lengths = [len(sentence) for sentence in sentences]
+        features_spacy["AVERAGE_SENTENCE_LENGTH"] = sum(sentence_lengths) / len(
+            sentence_lengths
+        )
+    else:
+        features_spacy["AVERAGE_SENTENCE_LENGTH"] = 0
+
+    COLLOQUIALISMS = ["mano", "tá ligado", "tipo assim", "né", "daora"]
+    FORMAL_CONJUNCTIONS = [
+        "ademais",
+        "outrossim",
+        "dessa forma",
+        "portanto",
+        "entretanto",
+        "contudo",
+    ]
+
+    features_custom = {}
+    features_custom["COLLOQUALISM_COUNT"] = sum(
+        1 for exp in COLLOQUIALISMS if exp in essay
+    )
+    features_custom["FORMAL_CONJUNCTION_COUNT"] = sum(
+        1 for con in FORMAL_CONJUNCTIONS if con in essay
+    )
+
+    return pl.DataFrame(
         error_counts
+        | essay_data
         | {
-            "c1": essay_c1_score,
-            "total_error_count": total_error_count,
-            "word_count": word_count,
-            "sentence_count": sentence_count,
+            "TOTAL_ERROR_COUNT": total_error_count,
+            "WORD_COUNT": word_count,
+            "SENTENCE_COUNT": sentence_count,
         }
+        | features_spacy
+        | features_custom
     )
 
 
@@ -52,126 +103,75 @@ def essay_token_count(encoded_essay):
 
 
 def main():
-    nlp = spacy.load("pt_core_news_lg")
-    tool = language_tool_python.LanguageTool("pt-BR")
+    logger.info("Starting LanguageTool feature extraction process...")
 
     dataset_parquet_file_path = (
         pathlib.Path.cwd()
         / "generated_datasets"
         / "extended_essay-br_preprocessed_for_LanguageTool.parquet"
     )
+    logger.info(f"Checking dataset file: {dataset_parquet_file_path}")
     if not dataset_parquet_file_path.exists():
-        print(
-            f"""[ERROR] Dataset file  not found at path {dataset_parquet_file_path}"""
-        )
+        logger.error(f"Dataset file not found at path {dataset_parquet_file_path}")
         return
 
-    print(f"[DEBUG] Loading dataset from {dataset_parquet_file_path}...")
+    logger.info(f"Loading dataset from {dataset_parquet_file_path}...")
     relevant_columns = "c1", "essay_as_single_utf8_string", "prompt"
     dataset = (
         pl.scan_parquet(dataset_parquet_file_path)
         .select(relevant_columns)
         .drop_nulls()
         .unique()
-        .collect()
+        .with_row_index("essay_id")
     )
-    print(f"[DEBUG] dataset loaded:\n{dataset}")
 
-    def parallel_essay_metrics(essay_as_single_utf8_string_column, c1_column):
-        with concurrent.futures.ProcessPoolExecutor() as executor:
-            futures = (
-                executor.submit(essay_metrics, essay, c1, idx, nlp, tool)
-                for idx, (essay, c1) in enumerate(
-                    zip(essay_as_single_utf8_string_column, c1_column)
-                )
-            )
+    # Apply row limit if specified
+    if MAX_SAMPLES is not None:
+        logger.info(f"Applying row limit: {MAX_SAMPLES}")
+        dataset = dataset.head(MAX_SAMPLES)
+        logger.info(f"Applied row limit. Processing at most {MAX_SAMPLES} essays")
+    else:
+        logger.info("No row limit applied. Processing all essays")
+    dataset = dataset.collect()
+    logger.info(f"Dataset loaded successfully. Shape: {dataset.shape}")
 
-            for future in concurrent.futures.as_completed(futures):
-                yield future.result().collect()
+    total_essay_count = len(dataset)
+    logger.info(f"Starting feature extraction for {total_essay_count} essays...")
 
-    print(f"Calculating metrics for {len(dataset)} essays...")
+    results = (
+        essay_metrics(essay_data, total_essay_count)
+        for essay_data in dataset.to_dicts()
+    )
+
+    logger.info("Concatenating results...")
     dataset_with_languagetool_metrics = pl.concat(
-        parallel_essay_metrics(dataset["essay_as_single_utf8_string"], dataset["c1"]),
+        results,
         how="diagonal",
     ).with_columns(pl.all().fill_null(strategy="zero"))
-    print(
-        "\n\n[DEBUG] dataset_with_languagetool_metrics:\n",
+
+    logger.info(
+        f"Feature extraction completed. Result shape: {dataset_with_languagetool_metrics.shape}"
+    )
+    logger.info(f"Final dataset preview:\n{dataset_with_languagetool_metrics.head()}")
+
+    # Save results to files
+    project_root = pathlib.Path(__file__).parent.parent.parent
+    assert project_root.name == "rp2"
+
+    generated_datasets_directory = project_root / "generated_datasets"
+    generated_datasets_directory.mkdir(exist_ok=True)
+
+    dataset_with_languagetool_metrics_filename = "dataset_with_languagetool_metrics"
+    dataset_with_languagetool_metrics_extensions = "parquet", "csv", "json"
+
+    utils.save_dataset(
         dataset_with_languagetool_metrics,
+        dataset_with_languagetool_metrics_filename,
+        *dataset_with_languagetool_metrics_extensions,
     )
 
-    def parallel_essay_metrics(dataset):
-        with concurrent.futures.ProcessPoolExecutor() as executor:
-            futures = (
-                executor.submit(essay_metrics, essay, c1, idx, nlp, tool)
-                for idx, (essay, c1) in enumerate(
-                    zip(dataset["essay_as_single_utf8_string"], dataset["c1"])
-                )
-            )
-
-            for future in concurrent.futures.as_completed(futures):
-                yield future.result().collect()
-
-    dataset_with_languagetool_metrics = pl.concat(
-        parallel_essay_metrics(dataset),
-        how="diagonal",
-    ).with_columns(pl.all().fill_null(strategy="zero"))
-    print(
-        "\n\n[DEBUG] dataset_with_languagetool_metrics:\n",
-        dataset_with_languagetool_metrics,
-    )
-
-    project_root = pathlib.Path(__file__).parent.parent.parent / "generated_datasets"
-
-    dataset_with_languagetool_metrics_file_path_prefix = (
-        "dataset_with_languagetool_metrics"
-    )
-
-    dataset_with_languagetool_metrics_parquet_file_path = (
-        project_root / f"{dataset_with_languagetool_metrics_file_path_prefix}.parquet"
-    )
-    print(
-        "[DEBUG] Writing dataset to Parquet file: ",
-        dataset_with_languagetool_metrics_parquet_file_path,
-    )
-    dataset_with_languagetool_metrics.write_parquet(
-        dataset_with_languagetool_metrics_parquet_file_path,
-    )
-    print(
-        "[DEBUG] Metrics written to Parquet file: ",
-        dataset_with_languagetool_metrics_parquet_file_path,
-    )
-
-    dataset_with_languagetool_metrics_csv_file_path = (
-        project_root / f"{dataset_with_languagetool_metrics_file_path_prefix}.csv"
-    )
-    print(
-        "[DEBUG] Writing dataset to CSV file: ",
-        dataset_with_languagetool_metrics_csv_file_path,
-    )
-    dataset_with_languagetool_metrics.write_csv(
-        dataset_with_languagetool_metrics_csv_file_path
-    )
-    print(
-        "[DEBUG] Metrics written to CSV file: ",
-        dataset_with_languagetool_metrics_csv_file_path,
-    )
-
-    dataset_with_languagetool_metrics_json_file_path = (
-        project_root / f"{dataset_with_languagetool_metrics_file_path_prefix}.json"
-    )
-    print(
-        "[DEBUG] Writing dataset to JSON file: ",
-        dataset_with_languagetool_metrics_json_file_path,
-    )
-    dataset_with_languagetool_metrics.write_json(
-        dataset_with_languagetool_metrics_json_file_path
-    )
-    print(
-        "[DEBUG] Metrics written to JSON file: ",
-        dataset_with_languagetool_metrics_json_file_path,
-    )
+    logger.info("LanguageTool feature extraction process completed successfully!")
 
 
 if __name__ == "__main__":
     main()
-

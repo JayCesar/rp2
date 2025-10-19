@@ -1,38 +1,29 @@
-import os
 import pathlib
+import sys
+
 import numpy as np
-import pandas as pd
 import polars as pl
+import scipy.stats
+import sklearn.metrics
+import sklearn.model_selection
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-from sklearn.model_selection import train_test_split, StratifiedKFold
-from sklearn.metrics import (
-    mean_squared_error,
-    mean_absolute_error,
-    r2_score,
-    cohen_kappa_score,
-)
-from sklearn.utils.class_weight import compute_class_weight
-from scipy.stats import pearsonr
-import numpy as np
+import torch.utils.data
+import tqdm
 import transformers
-from transformers import (
-    AutoTokenizer,
-    AutoModel,
-    get_linear_schedule_with_warmup,
-    TrainingArguments,
-    Trainer,
-)
-import logging
-from tqdm import tqdm
-import re
-import string
-import spacy
+from feature_extraction import utils
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Add the project root to sys.path to allow absolute imports
+project_root = pathlib.Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+# Add ai-analysis directory to path since it has a hyphen (not valid Python module name)
+ai_analysis_path = pathlib.Path(__file__).parent.parent
+if str(ai_analysis_path) not in sys.path:
+    sys.path.insert(0, str(ai_analysis_path))
+
+logger = utils.logger
 
 # Model configuration constants
 MAX_LENGTH = 512  # Maximum sequence length for BERT tokenization
@@ -49,15 +40,25 @@ C1_MIN = 40  # Without essays with C1 score of 0
 
 C1_MAX = 200
 
+SAMPLE_SIZE_UPPER_BOUND = 2**31 - 1
+
 
 def normalize_c1_scores(scores):
-    """Normalize C1 scores to [0, 1] range for better training stability."""
-    return [(score - C1_MIN) / (C1_MAX - C1_MIN) for score in scores]
+    """Normalize C1 scores using the global constants for better training stability."""
+    if isinstance(scores, (int, float)):
+        return (scores - C1_MEAN) / C1_STD
+    else:
+        scores_array = np.array(scores)
+        return (scores_array - C1_MEAN) / C1_STD
 
 
-def denormalize_c1_scores(normalized_scores):
-    """Convert normalized scores back to original C1 range."""
-    return [score * (C1_MAX - C1_MIN) + C1_MIN for score in normalized_scores]
+def denormalize_c1_scores(scores):
+    """Denormalize C1 scores using the global constants back to [0, 200] range."""
+    if isinstance(scores, (int, float)):
+        return scores * C1_STD + C1_MEAN
+    else:
+        scores_array = np.array(scores)
+        return scores_array * C1_STD + C1_MEAN
 
 
 def quadratic_weighted_kappa(y_true, y_pred, labels=None):
@@ -114,75 +115,6 @@ def quadratic_weighted_kappa(y_true, y_pred, labels=None):
     return qwk
 
 
-class EssayDataset(Dataset):
-    """Custom Dataset for essay data with C1 labels.
-
-    Args:
-        essays: List of essay texts
-        labels: List of corresponding C1 labels
-        tokenizer: HuggingFace tokenizer
-        max_length: Maximum sequence length for tokenization
-    """
-
-    def __init__(
-        self,
-        essays: list[str],
-        labels: list[float],
-        tokenizer,
-        max_length: int = 512,
-        normalize_labels: bool = True,
-    ):
-        super().__init__()
-        self.essays = essays
-
-        # Normalize C1 labels for better training stability
-        if normalize_labels:
-            self.labels = normalize_c1_scores(labels)
-        else:
-            self.labels = labels
-        self.tokenizer = tokenizer
-        self.max_length = max_length
-        self.normalize_labels = normalize_labels
-
-        # Validate inputs
-        assert len(essays) == len(labels), "Essays and labels must have same length"
-
-    def __len__(self) -> int:
-        return len(self.essays)
-
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        essay = str(self.essays[idx])
-        label = float(self.labels[idx])
-
-        # Tokenize the essay with proper error handling
-        try:
-            encoding = self.tokenizer(
-                essay,
-                truncation=True,
-                padding="max_length",
-                max_length=self.max_length,
-                return_tensors="pt",
-            )
-        except Exception as e:
-            logger.warning(f"Error tokenizing essay at index {idx}: {e}")
-            # Return a fallback encoding for empty/problematic text
-            encoding = self.tokenizer(
-                "[EMPTY]",
-                truncation=True,
-                padding="max_length",
-                max_length=self.max_length,
-                return_tensors="pt",
-            )
-
-        return {
-            "input_ids": encoding["input_ids"].flatten(),
-            "attention_mask": encoding["attention_mask"].flatten(),
-            "labels": torch.tensor(
-                label, dtype=torch.float32
-            ),  # Use float32 for consistency
-        }
-
-
 class BERTimbauForC1Prediction(nn.Module):
     """BERTimbau model with regression head for C1 prediction.
 
@@ -192,15 +124,16 @@ class BERTimbauForC1Prediction(nn.Module):
         dropout_prob: Dropout probability for regularization
     """
 
-    def __init__(self, model_name: str, num_labels: int = 1, dropout_prob: float = 0.1):
-        super().__init__()  # Modern Python super() syntax
-        self.bert = AutoModel.from_pretrained(model_name)
+    def __init__(self, model_name, num_labels: int = 1, dropout_prob: float = 0.1):
+        super().__init__()
+        self.bert = transformers.AutoModel.from_pretrained(model_name)
+
         self.dropout = nn.Dropout(dropout_prob)
         self.regressor = nn.Linear(self.bert.config.hidden_size, num_labels)
 
-        # Initialize weights with Xavier/Glorot initialization for better training
-        nn.init.xavier_uniform_(self.regressor.weight)
-        nn.init.zeros_(self.regressor.bias)
+        # # Initialize weights with Xavier/Glorot initialization for better training
+        # nn.init.xavier_uniform_(self.regressor.weight)
+        # nn.init.zeros_(self.regressor.bias)
 
     def forward(
         self,
@@ -230,40 +163,104 @@ class BERTimbauForC1Prediction(nn.Module):
         loss = None
         if labels is not None:
             # Use MSE loss for regression
-            loss_fn = nn.MSELoss()
+            loss_fn = nn.MSELoss()  # L1Loss is MAE
             loss = loss_fn(logits.squeeze(-1), labels)
 
         return {"loss": loss, "logits": logits}
 
 
 def load_and_prepare_data(
-    csv_path: str | pathlib.Path, max_samples: int | None = None
-) -> tuple[list[str], list[float]]:
+    csv_path: str | pathlib.Path,
+    model,
+    tokenizer,
+    max_samples: int | None = None,
+) -> pl.DataFrame:
     """Load and prepare the essay dataset.
 
     Args:
         csv_path: Path to the CSV file containing essays
+        tokenizer: HuggingFace tokenizer
         max_samples: Maximum number of samples to load (None for all)
 
     Returns:
-        Tuple of (essays, c1_labels)
+        pl.DataFrame with vectorized_essays, essay prompts, and c1 scores
     """
     logger.info(f"Loading dataset from {csv_path}")
-    print(f"[DEBUG] Loading dataset from {csv_path}")
 
-    SAMPLE_SIZE_UPPER_BOUND = 2**31 - 1
+    def vectorize_essay(essay, idx, total_essays, model, tokenizer):
+        tokenized_essay = tokenizer(
+            essay,
+            truncation=True,
+            padding="max_length",
+            max_length=MAX_LENGTH,
+            return_tensors="pt",
+        )
+
+        if idx % 10 == 0:
+            logger.info(f"vectorize_essay: essay {idx} / {total_essays} =\n{essay}")
+
+        with torch.no_grad():
+            # Get BERT embeddings using the underlying BERT model
+            # instead of going through the custom model's forward method
+            bert_outputs = model.bert(
+                input_ids=tokenized_essay["input_ids"],
+                attention_mask=tokenized_essay["attention_mask"],
+            )
+            # # Use the [CLS] token representation (first token) from last hidden state
+            # print(bert_outputs)
+
+            # Use the [CLS] token representation (first token)
+            cls_token_vector = bert_outputs.pooler_output
+            print(cls_token_vector)
+            # all_token_vectors = bert_outputs.last_hidden_state
+            # cls_token_vector = all_token_vectors[0, 0]  # [batch_size=1, token_0=CLS]
+
+        return cls_token_vector
+
+    sample_max_amount = (
+        max_samples if max_samples is not None else SAMPLE_SIZE_UPPER_BOUND
+    )
+
     relevant_columns = ["c1", "essay_as_single_utf8_string", "prompt"]
     df = (
         pl.scan_csv(csv_path)
-        .head(max_samples if max_samples is not None else SAMPLE_SIZE_UPPER_BOUND)
+        .head(sample_max_amount)
         .select(relevant_columns)
         .drop_nulls()
-        .filter(
-            (pl.col("c1") > 0)
-        )  # Remove samples with C1 score of 0, as they are not reliable enough
         .unique()
+        # .filter(
+        #     (pl.col("c1") > 0)
+        # ) # Remove samples with C1 score of 0, as they are not reliable enough
+        .with_columns(
+            pl.col("essay_as_single_utf8_string")
+            .map_batches(
+                lambda essays: pl.Series(
+                    (
+                        vectorize_essay(essay, idx, sample_max_amount, model, tokenizer)
+                        for idx, essay in enumerate(essays)
+                    )
+                )
+            )
+            .alias("essay_vector")
+        )
         .collect()
     )
+
+    print(df)
+
+    c1_scores = df["c1"].to_numpy()
+
+    global C1_MEAN
+    C1_MEAN = c1_scores.mean()
+
+    global C1_STD
+    C1_STD = c1_scores.std()
+
+    global C1_MIN
+    C1_MIN = c1_scores.min()
+
+    global C1_MAX
+    C1_MAX = c1_scores.max()
 
     logger.info(f"Dataset loaded with {len(df)} samples")
 
@@ -271,7 +268,7 @@ def load_and_prepare_data(
 
 
 def evaluate_model(
-    model: nn.Module, dataloader: DataLoader, device: torch.device
+    model: nn.Module, dataloader: torch.utils.data.DataLoader, device: torch.device
 ) -> dict[str, float]:
     """Evaluate the model and return metrics.
 
@@ -300,28 +297,24 @@ def evaluate_model(
 
             total_loss += outputs["loss"].item()
 
-            # Get normalized predictions and denormalize them for metrics calculation
-            normalized_preds = outputs["logits"].squeeze().cpu().numpy()
-            denormalized_preds = denormalize_c1_scores(
-                normalized_preds
-                if hasattr(normalized_preds, "__len__")
-                else [normalized_preds]
-            )
-            predictions.extend(denormalized_preds)
+            # Get predictions directly (no normalization)
+            preds = outputs["logits"].squeeze().cpu().numpy()
+            if hasattr(preds, "__len__"):
+                predictions.extend(preds)
+            else:
+                predictions.append(preds)
 
-            # Denormalize true labels for metrics calculation
-            normalized_labels = labels.cpu().numpy()
-            denormalized_labels = denormalize_c1_scores(
-                normalized_labels
-                if hasattr(normalized_labels, "__len__")
-                else [normalized_labels]
-            )
-            true_labels.extend(denormalized_labels)
+            # Get true labels directly (no normalization)
+            labels_np = labels.cpu().numpy()
+            if hasattr(labels_np, "__len__"):
+                true_labels.extend(labels_np)
+            else:
+                true_labels.append(labels_np)
 
     avg_loss = total_loss / len(dataloader)
-    mse = mean_squared_error(true_labels, predictions)
-    mae = mean_absolute_error(true_labels, predictions)
-    r2 = r2_score(true_labels, predictions)
+    mse = sklearn.metrics.mean_squared_error(true_labels, predictions)
+    mae = sklearn.metrics.mean_absolute_error(true_labels, predictions)
+    r2 = sklearn.metrics.r2_score(true_labels, predictions)
 
     # Calculate Cohen's Kappa - round predictions and true labels to nearest C1 score levels
     # Convert continuous predictions to discrete C1 levels for kappa calculation
@@ -341,8 +334,10 @@ def evaluate_model(
     predictions_rounded = round_to_c1_levels(predictions)
 
     try:
-        kappa = cohen_kappa_score(true_labels_rounded, predictions_rounded)
-    except Exception as e:
+        kappa = sklearn.metrics.cohen_kappa_score(
+            true_labels_rounded, predictions_rounded
+        )
+    except Exception:
         # If kappa calculation fails (e.g., only one class), set to 0
         kappa = 0.0
 
@@ -351,16 +346,16 @@ def evaluate_model(
         qwk = quadratic_weighted_kappa(
             true_labels_rounded, predictions_rounded, labels=[0, 40, 80, 120, 160, 200]
         )
-    except Exception as e:
+    except Exception:
         qwk = 0.0
 
     # Calculate Pearson correlation
     try:
-        pearson_corr, pearson_p = pearsonr(true_labels, predictions)
+        pearson_corr, _pearson_p = scipy.stats.pearsonr(true_labels, predictions)
         # Handle case where correlation is NaN
         if np.isnan(pearson_corr):
             pearson_corr = 0.0
-    except Exception as e:
+    except Exception:
         pearson_corr = 0.0
 
     return {
@@ -376,10 +371,10 @@ def evaluate_model(
 
 def train_model(
     model: nn.Module,
-    train_dataloader: DataLoader,
-    val_dataloader: DataLoader,
+    train_dataloader: torch.utils.data.DataLoader,
+    val_dataloader: torch.utils.data.DataLoader,
     device: torch.device,
-    num_epochs: int = 3,
+    num_epochs: int = 10,
     learning_rate: float = 2e-5,
 ) -> tuple[list[float], list[dict[str, float]]]:
     """Train the BERTimbau model for C1 prediction.
@@ -397,10 +392,9 @@ def train_model(
     """
     model.to(device)
 
-    # Optimizer and scheduler (using PyTorch's AdamW instead of deprecated transformers version)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
     total_steps = len(train_dataloader) * num_epochs
-    scheduler = get_linear_schedule_with_warmup(
+    scheduler = transformers.get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=0.1 * total_steps, num_training_steps=total_steps
     )
 
@@ -415,7 +409,7 @@ def train_model(
         # Training phase
         model.train()
         total_train_loss = 0
-        train_progress = tqdm(train_dataloader, desc=f"Training Epoch {epoch + 1}")
+        train_progress = tqdm.tqdm(train_dataloader, desc=f"Training Epoch {epoch + 1}")
 
         for batch in train_progress:
             optimizer.zero_grad()
@@ -465,6 +459,45 @@ def train_model(
     return train_losses, val_metrics
 
 
+class EssayDataset(torch.utils.data.Dataset):
+    """Dataset class for BERTimbau C1 fine-tuning."""
+
+    def __init__(self, data: pl.DataFrame, tokenizer, max_length: int = 512):
+        super().__init__()
+        self.data = data
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        # Get the row as a dict (not a list of dicts)
+        row = self.data.row(idx, named=True)
+
+        essay_text = row["essay"]
+        c1_score = row["c1"]
+
+        # Tokenize the essay text
+        encoding = self.tokenizer(
+            essay_text,
+            truncation=True,
+            padding="max_length",
+            max_length=self.max_length,
+            return_tensors="pt",
+        )
+
+        return {
+            "input_ids": encoding["input_ids"].flatten(),
+            "attention_mask": encoding["attention_mask"].flatten(),
+            "labels": torch.tensor(c1_score, dtype=torch.float),
+        }
+
+    def __getitems__(self, idxs):
+        # For batch processing - not used by default DataLoader
+        return [self.__getitem__(idx) for idx in idxs]
+
+
 def main():
     """Main function to run the fine-tuning process."""
     # Quick device check
@@ -482,7 +515,7 @@ def main():
 
     # Check and display device information first
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"\nDevice Detection:")
+    print("\nDevice Detection:")
     if torch.cuda.is_available():
         gpu_name = torch.cuda.get_device_name(0)
         gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
@@ -497,8 +530,9 @@ def main():
         if torch.cuda.device_count() > 0:
             print(f"Note: {torch.cuda.device_count()} GPU(s) detected but not usable")
 
-    # Paths
-    project_root = pathlib.Path(__file__).parent.parent
+    project_root = pathlib.Path(__file__).parent.parent.parent
+    assert project_root.name == "rp2"
+
     csv_path = (
         project_root
         / "generated_datasets"
@@ -511,9 +545,21 @@ def main():
 
     # Device already configured above
 
+    # Initialize model
+    logger.info(f"Loading model from {MODEL_NAME}")
+    print(f"[DEBUG] Loading model from {MODEL_NAME}")
+    model = BERTimbauForC1Prediction(MODEL_NAME, num_labels=1)
+
+    # Initialize tokenizer
+    logger.info(f"Loading tokenizer from {MODEL_NAME}")
+    print(f"[DEBUG] Loading tokenizer from {MODEL_NAME}")
+    tokenizer = transformers.AutoTokenizer.from_pretrained(MODEL_NAME)
+
     # Load and prepare data
-    dataset = load_and_prepare_data(csv_path, max_samples=MAX_SAMPLES)
-    essays = dataset["essay_as_single_utf8_string"]
+    dataset = load_and_prepare_data(csv_path, model, tokenizer, max_samples=MAX_SAMPLES)
+    print(dataset)
+
+    preprocessed_essays = dataset["essay_as_single_utf8_string"]
     c1_labels = dataset["c1"]
 
     # Create stratification groups for highly imbalanced data
@@ -521,8 +567,14 @@ def main():
     stratify_groups = [max(0, min(4, (label - 1) // 200)) for label in c1_labels]
 
     # Split the data with stratification
-    train_essays, val_essays, train_labels, val_labels = train_test_split(
-        essays, c1_labels, test_size=0.2, random_state=42, stratify=stratify_groups
+    train_essays, val_essays, train_labels, val_labels = (
+        sklearn.model_selection.train_test_split(
+            preprocessed_essays,
+            c1_labels,
+            test_size=0.3,
+            random_state=42,
+            stratify=stratify_groups,
+        )
     )
 
     total_samples = len(train_essays) + len(val_essays)
@@ -539,50 +591,33 @@ def main():
         f"Training configuration: BATCH_SIZE={BATCH_SIZE}, LEARNING_RATE={LEARNING_RATE:.6f}"
     )
 
-    # Initialize tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    input_datasets_file_extensions = "csv", "parquet", "json"
 
-    # Create datasets with normalized labels and NLP preprocessing enabled
-    train_dataset = EssayDataset(
-        train_essays, train_labels, tokenizer, MAX_LENGTH, normalize_labels=True
+    train_dataset = pl.DataFrame(
+        {"essay": train_essays, "c1": train_labels, "type": "train"}
     )
-    val_dataset = EssayDataset(
-        val_essays, val_labels, tokenizer, MAX_LENGTH, normalize_labels=True
+    logger.info(f"Saving training dataset to {model_save_path}...")
+    utils.save_dataset(
+        train_dataset, "BERT_train_dataset", *input_datasets_file_extensions
     )
+    logger.info(f"Saved validation dataset to {model_save_path}")
 
-    essays_df = pl.concat(
-        pl.DataFrame({"essay": train_essays, "c1": train_labels, "type": "train"}),
-        pl.DataFrame({"essay": val_essays, "c1": val_labels, "type": "val"}),
-    )
-    essays_df.write_parquet(
-        project_root
-        / "generated_datasets"
-        / "extended_essay-br_preprocessed_for_BERT.parquet"
-    )
-    logger.info(
-        f"Dataset saved to {project_root / 'generated_datasets' / 'extended_essay-br_preprocessed_for_BERT.parquet'}"
-    )
-    print(
-        f"Dataset saved to {project_root / 'generated_datasets' / 'extended_essay-br_preprocessed_for_BERT.parquet'}"
-    )
-    essays_df.write_csv(
-        project_root
-        / "generated_datasets"
-        / "extended_essay-br_preprocessed_for_BERT.csv"
-    )
-    logger.info(
-        f"Dataset saved to {project_root / 'generated_datasets' / 'extended_essay-br_preprocessed_for_BERT.csv'}"
-    )
-    print(
-        f"Dataset saved to {project_root / 'generated_datasets' / 'extended_essay-br_preprocessed_for_BERT.csv'}"
-    )
+    val_dataset = pl.DataFrame({"essay": val_essays, "c1": val_labels, "type": "val"})
+    logger.info(f"Saving validation dataset to {model_save_path}...")
+    utils.save_dataset(val_dataset, "BERT_val_dataset", *input_datasets_file_extensions)
+    logger.info(f"Saved validation dataset to {model_save_path}")
 
     # Create data loaders
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
-
-    # Initialize model
-    model = BERTimbauForC1Prediction(MODEL_NAME, num_labels=1)
+    train_dataloader = torch.utils.data.DataLoader(
+        EssayDataset(train_dataset, tokenizer, MAX_LENGTH),
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+    )
+    val_dataloader = torch.utils.data.DataLoader(
+        EssayDataset(val_dataset, tokenizer, MAX_LENGTH),
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+    )
 
     # Train the model
     train_losses, val_metrics = train_model(
@@ -647,7 +682,7 @@ def main():
     if torch.cuda.is_available():
         print(f"Trained using GPU: {torch.cuda.get_device_name(0)}")
     else:
-        print(f"Trained using CPU")
+        print("Trained using CPU")
     print(f"Model saved to: {model_save_path}")
 
 
