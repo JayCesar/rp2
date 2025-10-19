@@ -24,7 +24,7 @@ def plotar_histograma_com_valores(ax, data, bins, title, xlabel, color, xticks=N
                 str(int(n[i])),         
                 ha='center',            
                 va='bottom',            
-                fontsize=9
+                fontsize=7
             )
 
     ax.set_title(f"{title} (N={len(data)})")
@@ -67,7 +67,7 @@ def gerar_graficos_distribuicao():
     plotar_histograma_com_valores(
         ax=axes[0, 1], 
         data=notas_originais_final, 
-        bins=20, 
+        bins=26, 
         title="Distribuição Nota Final Original",
         xlabel="Nota Final (0 a 1000)",
         color='lightcoral'
@@ -86,7 +86,7 @@ def gerar_graficos_distribuicao():
     plotar_histograma_com_valores(
         ax=axes[1, 1], 
         data=notas_gemini_final, 
-        bins=20, 
+        bins=26, 
         title="Distribuição Gemini Nota Final",
         xlabel="Nota Final Gemini (0 a 1000)",
         color='gold'
