@@ -34,7 +34,6 @@ Metrics:
 """
 
 import logging
-import os
 import pathlib
 import random
 from dataclasses import asdict, dataclass
@@ -47,7 +46,6 @@ import scipy.stats
 import sklearn.metrics
 import torch
 import torch.nn as nn
-from torch.cuda.amp import autocast
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence, pad_sequence
 from torch.utils.data import DataLoader, Dataset, Subset, random_split
 
@@ -106,39 +104,39 @@ class ModelConfig:
         return cls(**d)
 
 
-@dataclass
-class DataConfig:
-    """Configuration for data loading and preprocessing."""
-
-    train_csv: str | None = None
-    val_csv: str | None = None
-    test_csv: str | None = None
-    id_column: str = "id"
-    embedding_column: str = "embedding_path"
-    score_column: str = "c1"
-    embedding_format: Literal["npy", "pt", "auto"] = "auto"
-    max_seq_len: int = 1024
-    pad_value: float = 0.0
-    num_workers: int = 4
-    pin_memory: bool = True
-    persistent_workers: bool = True
-    val_split: float = 0.1
-    test_split: float = 0.0
-    shuffle: bool = True
-
-    def to_dict(self) -> dict[str, str | int | float | bool | None]:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, d: dict[str, str | int | float | bool | None]) -> "DataConfig":
-        return cls(**d)
+# @dataclass
+# class DataConfig:
+#     """Configuration for data loading and preprocessing."""
+#
+#     train_csv: str | None = None
+#     val_csv: str | None = None
+#     test_csv: str | None = None
+#     id_column: str = "id"
+#     embedding_column: str = "embedding_path"
+#     score_column: str = "c1"
+#     embedding_format: Literal["npy", "pt", "auto"] = "auto"
+#     max_seq_len: int = 1024
+#     pad_value: float = 0.0
+#     num_workers: int = 4
+#     pin_memory: bool = True
+#     persistent_workers: bool = True
+#     val_split: float = 0.1
+#     test_split: float = 0.0
+#     shuffle: bool = True
+#
+#     def to_dict(self) -> dict[str, str | int | float | bool | None]:
+#         return asdict(self)
+#
+#     @classmethod
+#     def from_dict(cls, d: dict[str, str | int | float | bool | None]) -> "DataConfig":
+#         return cls(**d)
 
 
 @dataclass
 class TrainConfig:
     """Configuration for training parameters."""
 
-    epochs: int = 25
+    epochs: int = 50
     batch_size: int = 32
     lr: float = 1.01e-03
     weight_decay: float = 4.67e-06
@@ -396,11 +394,9 @@ class EssayDataset(Dataset):
         return self.records.row(idx, named=True)
 
     def __getitems__(self, indices):
-        return (
-            self.records.with_row_index(name="index")
-            .filter(pl.col("index").is_in(indices))
-            .to_dicts()
-        )
+        # Lightweight batched getter to avoid heavy DataFrame ops in worker processes
+        # and prevent DataLoader hangs due to excessive I/O or non-picklable state.
+        return [self.__getitem__(idx) for idx in indices]
 
 
 def collate_batch(
@@ -523,7 +519,7 @@ class BiLSTMRegressor(nn.Module):
         else:
             self.aggregation = None
 
-        # Output head: single linear readout (no hidden MLP)
+        # Output head: simple linear layer (no MLP needed for sequential processing)
         self.head = nn.Linear(lstm_output_size, 1)
 
     def forward(self, tokens: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
@@ -671,22 +667,16 @@ class MetricsAccumulator:
         predictions_rounded = round_to_c1_levels(preds_clamped.tolist())
 
         # Cohen's Kappa
-        try:
-            kappa = sklearn.metrics.cohen_kappa_score(
-                true_labels_rounded, predictions_rounded
-            )
-        except Exception:
-            kappa = 0.0
+        kappa = sklearn.metrics.cohen_kappa_score(
+            true_labels_rounded, predictions_rounded
+        )
 
         # Quadratic Weighted Kappa
-        try:
-            qwk = quadratic_weighted_kappa(
-                true_labels_rounded,
-                predictions_rounded,
-                labels=[0, 40, 80, 120, 160, 200],
-            )
-        except Exception:
-            qwk = 0.0
+        qwk = quadratic_weighted_kappa(
+            true_labels_rounded,
+            predictions_rounded,
+            labels=[0, 40, 80, 120, 160, 200],
+        )
 
         # Pearson correlation
         try:
@@ -699,7 +689,7 @@ class MetricsAccumulator:
         return {
             "loss": float(mse),  # Use MAE as loss like the CLaRiCe paper
             "mae": float(mae),
-            "mse": float(mse),
+            # "mse": float(mse),
             "rmse": float(rmse),
             "r2": float(r2),
             "kappa": float(kappa),
@@ -791,21 +781,21 @@ def evaluate_model(
     return computed_metrics, predictions
 
 
-def create_synthetic_dataset(
-    n_samples: int = 256, min_len: int = 5, max_len: int = 200
-) -> EssayDataset:
-    """Create a synthetic dataset for testing."""
-    # Generate random embeddings and scores
-    arrays = []
-    scores = []
-    valid_scores = [0, 40, 80, 120, 160, 200]
-
-    for i in range(n_samples):
-        seq_len = np.random.randint(min_len, max_len + 1)
-        embedding = np.random.randn(seq_len, 768).astype(np.float32)
-        score = float(np.random.choice(valid_scores))
-
-        arrays.append(embedding)
-        scores.append(score)
-
-    return EssayDataset.from_memory(arrays, scores)
+# def create_synthetic_dataset(
+#     n_samples: int = 256, min_len: int = 5, max_len: int = 200
+# ) -> EssayDataset:
+#     """Create a synthetic dataset for testing."""
+#     # Generate random embeddings and scores
+#     arrays = []
+#     scores = []
+#     valid_scores = [0, 40, 80, 120, 160, 200]
+#
+#     for i in range(n_samples):
+#         seq_len = np.random.randint(min_len, max_len + 1)
+#         embedding = np.random.randn(seq_len, 768).astype(np.float32)
+#         score = float(np.random.choice(valid_scores))
+#
+#         arrays.append(embedding)
+#         scores.append(score)
+#
+#     return EssayDataset.from_memory(arrays, scores)

@@ -23,57 +23,10 @@ pip install torch numpy polars
 """
 
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import Literal
-
-project_root = Path(__file__).parent.parent.parent
-assert project_root.name == "rp2"
-
-
-# Check for required packages and provide installation instructions
-def check_dependencies():
-    """Check for required packages and provide installation instructions."""
-    missing_packages = []
-
-    try:
-        import numpy
-    except ImportError:
-        missing_packages.append("numpy")
-
-    try:
-        import polars
-    except ImportError:
-        missing_packages.append("polars")
-
-    try:
-        import torch
-    except ImportError:
-        missing_packages.append("torch")
-
-    if missing_packages:
-        print("❌ Missing required packages!")
-        print("\nTo install the required packages, run:")
-        print(f"pip install {' '.join(missing_packages)}")
-        print("\nFor PyTorch, you might need:")
-        print(
-            "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu"
-        )
-        print("or for CUDA support:")
-        print(
-            "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118"
-        )
-        return False
-
-    return True
-
-
-# Only proceed with imports if dependencies are available
-if not check_dependencies():
-    sys.exit(1)
-
-# Now import the required packages
-from pathlib import Path
 
 import numpy as np
 import polars as pl
@@ -95,6 +48,51 @@ from blstm import (
 )
 from trainer import BiLSTMTrainer
 
+project_root = Path(__file__).parent.parent.parent
+assert project_root.name == "rp2"
+
+
+# # Check for required packages and provide installation instructions
+# def check_dependencies():
+#     """Check for required packages and provide installation instructions."""
+#     missing_packages = []
+#
+#     try:
+#         import numpy
+#     except ImportError:
+#         missing_packages.append("numpy")
+#
+#     try:
+#         import polars
+#     except ImportError:
+#         missing_packages.append("polars")
+#
+#     try:
+#         import torch
+#     except ImportError:
+#         missing_packages.append("torch")
+#
+#     if missing_packages:
+#         print("❌ Missing required packages!")
+#         print("\nTo install the required packages, run:")
+#         print(f"pip install {' '.join(missing_packages)}")
+#         print("\nFor PyTorch, you might need:")
+#         print(
+#             "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu"
+#         )
+#         print("or for CUDA support:")
+#         print(
+#             "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118"
+#         )
+#         return False
+#
+#     return True
+#
+#
+# # Only proceed with imports if dependencies are available
+# if not check_dependencies():
+#     sys.exit(1)
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
@@ -103,11 +101,29 @@ logger = logging.getLogger(__name__)
 
 
 class EssayDataset(Dataset):
-    """Dataset class for real essay vectors and C1 scores."""
+    """Dataset class for real essay vectors and C1 scores.
 
-    def __init__(self, data: pl.DataFrame):
+    Supports two input modes:
+    - Token embeddings: expects columns ['c1', 'essay_token_embeddings'] where essay_token_embeddings is [seq_len, 768]
+    - Feature vectors: expects 'c1' plus one or more feature columns (e.g., SCREAMING_SNAKE_CASE)
+    """
+
+    def __init__(self, data: pl.DataFrame, feature_cols: list[str]):
         super().__init__()
         self.data = data
+        cols = set(self.data.columns)
+        self.is_token_mode = "essay_token_embeddings" in cols
+        self.is_vector_mode = "essay_vector" in cols  # Keep for backward compatibility
+        # For feature mode, select only SCREAMING_SNAKE_CASE feature columns
+        if not (self.is_token_mode or self.is_vector_mode):
+            snake_case_pattern = re.compile(r"^[A-Z0-9_]+$")
+            self.feature_cols = [
+                c
+                for c in self.data.columns
+                if c != "c1" and snake_case_pattern.match(c)
+            ]
+        else:
+            self.feature_cols = []
 
     def __len__(self):
         return len(self.data)
@@ -116,18 +132,32 @@ class EssayDataset(Dataset):
         # Get the row as a dict (not a list of dicts)
         row = self.data.row(idx, named=True)
 
-        # Convert essay_vector to tensor with proper shape for LSTM
-        # Shape should be [seq_len, input_dim] = [1, 768] for single vector
-        essay_vector = torch.tensor(row["essay_vector"], dtype=torch.float32).unsqueeze(
-            0
-        )
+        if self.is_token_mode:
+            # essay_token_embeddings -> tensor [seq_len, 768]
+            token_embeddings = np.array(row["essay_token_embeddings"])
+            tokens = torch.tensor(token_embeddings, dtype=torch.float32)
+            # Calculate actual sequence length (non-padded tokens)
+            # This is a simplified approach - you might want to use attention masks
+            seq_length = len(token_embeddings)  # For now, use full length
+            lengths = torch.tensor(seq_length, dtype=torch.long)
+        elif self.is_vector_mode:
+            # essay_vector -> tensor [1, 768] - backward compatibility
+            tokens = torch.tensor(row["essay_vector"], dtype=torch.float32).unsqueeze(0)
+            lengths = torch.tensor(1, dtype=torch.long)
+        else:
+            # Assemble feature vector from selected columns -> tensor [1, input_dim]
+            if not self.feature_cols:
+                raise KeyError(
+                    "No feature columns found for feature mode. Ensure dataset has feature columns besides 'c1'."
+                )
+            features = [float(row[c]) for c in self.feature_cols]
+            tokens = torch.tensor(features, dtype=torch.float32).unsqueeze(0)
+            lengths = torch.tensor(1, dtype=torch.long)
 
         return {
             "id": f"essay_{idx}",
-            "tokens": essay_vector,  # Shape: [1, 768] - sequence of length 1
-            "lengths": torch.tensor(
-                1, dtype=torch.long
-            ),  # Length = 1 for single vector
+            "tokens": tokens,  # Shape: [seq_len, 768] or [1, input_dim]
+            "lengths": lengths,  # Actual sequence length
             "targets": torch.tensor(row["c1"], dtype=torch.float32),
         }
 
@@ -139,23 +169,23 @@ class EssayDataset(Dataset):
 def collate_batch(batch):
     """Collate function to properly batch essay data for BiLSTM training."""
     ids = [item["id"] for item in batch]
-    tokens = [item["tokens"] for item in batch]  # List of [1, 768] tensors
+    tokens = [item["tokens"] for item in batch]  # List of [seq_len, 768] tensors
     lengths = [item["lengths"] for item in batch]  # List of length tensors
     targets = [item["targets"] for item in batch]  # List of target tensors
 
     # Pad sequences to same length (for LSTM batch processing)
-    # Since all sequences have length 1, this is straightforward
+    # Use PyTorch's pad_sequence for variable length sequences
+    from torch.nn.utils.rnn import pad_sequence
 
-    # Stack tensors with proper batch dimension
-    # tokens: [batch_size, max_seq_len, input_dim] = [batch_size, 1, 768]
-    batched_tokens = torch.stack(tokens, dim=0)  # [batch_size, 1, 768]
+    # Pad token sequences: [batch_size, max_seq_len, 768]
+    batched_tokens = pad_sequence(tokens, batch_first=True, padding_value=0.0)
     batched_lengths = torch.stack(lengths)  # [batch_size]
     batched_targets = torch.stack(targets)  # [batch_size]
 
     return {
         "ids": ids,
-        "tokens": batched_tokens,
-        "lengths": batched_lengths,
+        "tokens": batched_tokens,  # [batch_size, max_seq_len, 768]
+        "lengths": batched_lengths,  # [batch_size] - actual sequence lengths
         "targets": batched_targets,
     }
 
@@ -308,17 +338,21 @@ def create_component1_config(
         return ModelConfig(
             hidden_sizes=[10, 26, 21],
             input_dim=768,
+            # No MLP head needed - BiLSTM now processes full sequences
         )
     if type == "features":
         return ModelConfig(
             hidden_sizes=[10, 26, 21],
             input_dim=30,
+            # No MLP head needed for feature input either
         )
 
 
 def create_training_config() -> TrainConfig:
     """Create training configuration based on Portuguese specifications."""
-    return TrainConfig()
+    return TrainConfig(
+        target_scaler="standard"  # Use standard scaler (z-normalization) instead of minmax
+    )
 
 
 def split_real_dataset(
@@ -372,11 +406,17 @@ def split_real_dataset(
         f"Stratified dataset split: Train={len(train_indices)}, Val={len(val_indices)}, Test={len(test_indices)}"
     )
 
-    # Create subset datasets
-    train_dataset = EssayDataset(pl.DataFrame(dataset.__getitems__(train_indices)))
-    print(train_dataset)
-    val_dataset = EssayDataset(pl.DataFrame(dataset.__getitems__(val_indices)))
-    test_dataset = EssayDataset(pl.DataFrame(dataset.__getitems__(test_indices)))
+    # Create subset datasets by taking rows from the original DataFrame
+    # This preserves the original schema (works for both vectorized essays and features)
+    train_dataset = EssayDataset(
+        dataset.data[train_indices], feature_cols=dataset.feature_cols
+    )
+    val_dataset = EssayDataset(
+        dataset.data[val_indices], feature_cols=dataset.feature_cols
+    )
+    test_dataset = EssayDataset(
+        dataset.data[test_indices], feature_cols=dataset.feature_cols
+    )
 
     # Log score distributions to verify stratification worked
     train_scores = [scores[i] for i in train_indices]
@@ -409,6 +449,16 @@ def train_component1_standard(
 
     # Create configurations
     model_config = create_component1_config(input_type)
+
+    # Adjust input_dim dynamically for feature inputs to match selected columns
+    if input_type == "features":
+        try:
+            model_config.input_dim = len(dataset.feature_cols)
+        except AttributeError:
+            # Fallback: infer from first row length (excluding target)
+            first_row = dataset.data.row(0, named=True)
+            model_config.input_dim = len([k for k in first_row.keys() if k != "c1"])
+
     train_config = create_training_config()
 
     logger.info(f"Model Config: {model_config.to_dict()}")
@@ -452,56 +502,69 @@ def train_component1_standard(
     )
 
     # Train model
+    best_metrics = trainer.train()
+    logger.info(f"Best metrics: {best_metrics}")
+
+    # Save checkpoint path
+    checkpoint_path = Path(output_dir) / "best.pt"
+
+    # Ensure the best checkpoint is saved at the expected path
     try:
-        best_metrics = trainer.train()
-        logger.info(f"Best metrics: {best_metrics}")
-
-        # Save checkpoint path
-        checkpoint_path = Path(output_dir) / "best.pt"
-
-        # Save training summary
-        summary_path = Path(output_dir) / "component1_real_data_summary.txt"
-        with open(summary_path, "w") as f:
-            f.write("Component 1 Training with Real Essay Data\n")
-            f.write("=" * 50 + "\n\n")
-            f.write("Portuguese Specifications Applied:\n")
-            f.write("- Total de camadas: 3\n")
-            f.write("- Unidades/Célula: 10/26/21 (approximated with final size 21)\n")
-            f.write("- Otimizador: Adam (AdamW)\n")
-            f.write("- Learning Rate: 1.01e-3\n")
-            f.write("- Dropout rate: 0.164\n")
-            f.write("- Weight Decay (L2): 4.67e-6\n\n")
-            f.write("Real Data Statistics:\n")
-            f.write(f"- Total essays: {len(dataset)}\n")
-            f.write(f"- Training set: {len(train_dataset)}\n")
-            f.write(f"- Validation set: {len(val_dataset)}\n")
-            f.write(f"- Test set: {len(test_dataset)}\n")
-            f.write("- Essay vector dimension: 768\n")
-            f.write("- C1 score range: 0-200\n\n")
-            f.write(f"Model Configuration:\n{model_config.to_dict()}\n\n")
-            f.write(f"Training Configuration:\n{train_config.to_dict()}\n\n")
-            f.write(f"Best Validation Metrics:\n{best_metrics}\n\n")
-            f.write("Training History (last 10 epochs):\n")
-            for entry in trainer.training_history[-10:]:
-                f.write(
-                    f"  Epoch {entry['epoch']}: "
-                    f"Train Loss={entry['train_loss']:.6f}, "
-                    f"Val MAE={entry['val_mae']:.2f}, "
-                    f"Val RMSE={entry['val_rmse']:.2f}, "
-                    f"Val Kappa={entry['val_kappa']:.2f}, "
-                    f"Val QWK={entry['val_qwk']:.2f}, "
-                    f"Val R²={entry['val_r2']:.2f}, "
-                    f"Val Pearson={entry['val_pearson_corr']:.2f}, "
-                    f"Val Step Acc={entry['val_step_accuracy']:.3f}, "
-                    f"Time={entry['epoch_time']:.1f}s\n"
-                )
-
-        logger.info(f"Training summary saved to: {summary_path}")
-        return best_metrics
-
+        trainer._save_checkpoint(is_best=True, metrics=best_metrics)
+        logger.info(f"Best checkpoint saved to: {checkpoint_path}")
     except Exception as e:
-        logger.error(f"Standard training failed: {e}")
-        return {}
+        logger.warning(
+            f"Failed to save checkpoint via trainer; saving minimal state to {checkpoint_path}: {e}"
+        )
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "model_config": model_config.to_dict(),
+                "train_config": train_config.to_dict(),
+                "metrics": best_metrics,
+            },
+            checkpoint_path,
+        )
+
+    # Save training summary
+    summary_path = Path(output_dir) / "component1_real_data_summary.txt"
+    with open(summary_path, "w") as f:
+        f.write("Component 1 Training with Real Essay Data\n")
+        f.write("=" * 50 + "\n\n")
+        f.write("Portuguese Specifications Applied:\n")
+        f.write("- Total de camadas: 3\n")
+        f.write("- Unidades/Célula: 10/26/21 (approximated with final size 21)\n")
+        f.write("- Otimizador: Adam (AdamW)\n")
+        f.write("- Learning Rate: 1.01e-3\n")
+        f.write("- Dropout rate: 0.164\n")
+        f.write("- Weight Decay (L2): 4.67e-6\n\n")
+        f.write("Real Data Statistics:\n")
+        f.write(f"- Total essays: {len(dataset)}\n")
+        f.write(f"- Training set: {len(train_dataset)}\n")
+        f.write(f"- Validation set: {len(val_dataset)}\n")
+        f.write(f"- Test set: {len(test_dataset)}\n")
+        f.write("- Essay vector dimension: 768\n")
+        f.write("- C1 score range: 0-200\n\n")
+        f.write(f"Model Configuration:\n{model_config.to_dict()}\n\n")
+        f.write(f"Training Configuration:\n{train_config.to_dict()}\n\n")
+        f.write(f"Best Validation Metrics:\n{best_metrics}\n\n")
+        f.write("Training History (last 10 epochs):\n")
+        for entry in trainer.training_history[-10:]:
+            f.write(
+                f"  Epoch {entry['epoch']}: "
+                f"Train Loss={entry['train_loss']:.6f}, "
+                f"Val MAE={entry['val_mae']:.2f}, "
+                f"Val RMSE={entry['val_rmse']:.2f}, "
+                f"Val Kappa={entry['kappa']:.2f}, "
+                f"Val QWK={entry['qwk']:.2f}, "
+                f"Val R²={entry['r2']:.2f}, "
+                f"Val Pearson={entry['pearson_corr']:.2f}, "
+                f"Val Step Acc={entry['step_accuracy']:.3f}, "
+                f"Time={entry['epoch_time']:.1f}s\n"
+            )
+
+    logger.info(f"Training summary saved to: {summary_path}")
+    return best_metrics
 
 
 def show_and_save_metrics(
@@ -590,7 +653,7 @@ def train_on_vectorized_essays(device: torch.device) -> None:
 
     # Load dataset with optional sample limit for testing
     max_samples = None  # Set to None to use all samples
-    relevant_columns = "c1", "essay_vector"
+    relevant_columns = "c1", "essay_token_embeddings"  # Updated column name
     DEFAULT_MAX_SAMPLE_SIZE = 2**31 - 1
     dataset = (
         pl.scan_parquet(data_file)
@@ -602,7 +665,7 @@ def train_on_vectorized_essays(device: torch.device) -> None:
     )
     logger.info(f"Loaded dataset with {len(dataset)} essays: {dataset.head(10)}")
 
-    dataset = EssayDataset(dataset)
+    dataset = EssayDataset(dataset, feature_cols=[])
 
     # Train using standard BiLSTMRegressor (approximated specifications)
     logger.info("\n" + "=" * 70)
@@ -665,7 +728,7 @@ def train_on_features(device: torch.device) -> None:
     )
     logger.info(f"Loaded dataset with {len(dataset)} essays: {dataset.head(10)}")
 
-    dataset = EssayDataset(dataset)
+    dataset = EssayDataset(dataset, feature_cols=[])
 
     # Train using standard BiLSTMRegressor (approximated specifications)
     logger.info("\n" + "=" * 70)

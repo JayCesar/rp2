@@ -386,9 +386,13 @@ class BiLSTMTrainer:
                     "epoch": epoch + 1,
                     "train_loss": train_loss,
                     "val_loss": val_loss,
-                    "val_rmse": val_mae,
-                    "val_mae": val_metrics.get("mae", 0.0),
-                    "val_step_accuracy": val_metrics.get("step_accuracy", 0.0),
+                    "val_mae": val_mae,
+                    "val_rmse": val_metrics["rmse"],
+                    "kappa": val_metrics["kappa"],
+                    "qwk": val_metrics["qwk"],
+                    "r2": val_metrics["r2"],
+                    "pearson_corr": val_metrics["pearson_corr"],
+                    "step_accuracy": val_metrics["step_accuracy"],
                     "learning_rate": self.optimizer.param_groups[0]["lr"],
                     "epoch_time": epoch_time,
                 }
@@ -400,9 +404,6 @@ class BiLSTMTrainer:
                 logger.info(f"Epoch {current_epoch} - Train Loss: {train_loss:.4f}")
                 logger.info(
                     f"Epoch {current_epoch} - Val Loss: {val_metrics['loss']:.4f}"
-                )
-                logger.info(
-                    f"Epoch {current_epoch} - Val MSE: {val_metrics['mse']:.4f}"
                 )
                 logger.info(
                     f"Epoch {current_epoch} - Val MAE: {val_metrics['mae']:.4f}"

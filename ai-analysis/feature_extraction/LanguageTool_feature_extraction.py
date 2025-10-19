@@ -3,12 +3,11 @@ import pathlib
 import language_tool_python
 import polars as pl
 import utils
-import feature_extraction
 
 logger = utils.logger
 
 # Configuration
-MAX_SAMPLES = None  # Process 25 essays in test mode, all otherwise
+MAX_SAMPLES = None  # Set to None to use all samples
 
 spacy_model_name = "pt_core_news_md"
 try:
@@ -153,6 +152,7 @@ def main():
         f"Feature extraction completed. Result shape: {dataset_with_languagetool_metrics.shape}"
     )
     logger.info(f"Final dataset preview:\n{dataset_with_languagetool_metrics.head()}")
+    logger.info(f"Final dataset columns: {dataset_with_languagetool_metrics.columns}")
 
     # Save results to files
     project_root = pathlib.Path(__file__).parent.parent.parent
