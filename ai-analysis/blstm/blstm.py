@@ -35,6 +35,7 @@ Metrics:
 
 import logging
 import os
+import pathlib
 import random
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -58,23 +59,23 @@ class ScoreConstants:
     STEP = 40
 
 
-# Configure logging
-def setup_logging(log_file: str | None = None, level: int = logging.INFO) -> None:
-    """Set up logging with console and optional file output."""
-    handlers = [logging.StreamHandler()]
-    if log_file:
-        os.makedirs(os.path.dirname(log_file), exist_ok=True)
-        handlers.append(logging.FileHandler(log_file))
-
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-        handlers=handlers,
-    )
-
-    # Reduce noise from some libraries
-    logging.getLogger("transformers").setLevel(logging.WARNING)
-    logging.getLogger("torch").setLevel(logging.WARNING)
+# # Configure logging
+# def setup_logging(log_file: str | None = None, level: int = logging.INFO) -> None:
+#     """Set up logging with console and optional file output."""
+#     handlers = [logging.StreamHandler()]
+#     if log_file:
+#         os.makedirs(os.path.dirname(log_file), exist_ok=True)
+#         handlers.append(logging.FileHandler(log_file))
+#
+#     logging.basicConfig(
+#         level=level,
+#         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+#         handlers=handlers,
+#     )
+#
+#     # Reduce noise from some libraries
+#     logging.getLogger("transformers").setLevel(logging.WARNING)
+#     logging.getLogger("torch").setLevel(logging.WARNING)
 
 
 logger = logging.getLogger(__name__)
@@ -85,13 +86,13 @@ logger = logging.getLogger(__name__)
 class ModelConfig:
     """Configuration for the BiLSTM model architecture."""
 
+    hidden_sizes: list[int]
     input_dim: int = 768
-    hidden_sizes: list[int] = [10, 26, 21]
     num_layers: int = 3
-    bidirectional: bool = True
+    # bidirectional: bool = True
     dropout: float = 1.64e-01
     aggregation: Literal["last", "mean", "max", "attn"] = "last"
-    mlp_hidden: int | None = 256
+    mlp_hidden: int | None = None
     use_layer_norm: bool = False
     output_range: tuple[int, int] = (ScoreConstants.MIN, ScoreConstants.MAX)
 
@@ -153,7 +154,7 @@ class TrainConfig:
     use_amp: bool = True
     amp_dtype: torch.dtype = torch.bfloat16
     # compile: bool = False
-    target_scaler: Literal["none", "minmax", "standard"] = "minmax"
+    target_scaler: Literal["none", "minmax", "standard"] = "none"
 
     def to_dict(self) -> dict[str, str | int | float | bool]:
         return asdict(self)
@@ -167,7 +168,7 @@ class TrainConfig:
 class SerializationConfig:
     """Configuration for model checkpointing and saving."""
 
-    output_dir: str = "runs/bilstm"
+    output_dir: pathlib.Path = pathlib.Path("runs/bilstm")
     save_best_only: bool = True
     keep_last_k: int = 3
 
@@ -429,7 +430,7 @@ def collate_batch(
 def split_dataset(
     dataset: EssayDataset,
     val_ratio: float = 0.1,
-    test_ratio: float = 0.1,
+    test_ratio: float = 0.15,
     seed: int = 42,
 ) -> tuple[Subset, Subset, Subset]:
     """Split dataset into train/val/test."""
@@ -485,19 +486,36 @@ class BiLSTMRegressor(nn.Module):
         super().__init__()
         self.config = config
 
-        # LSTM layers
-        self.lstm = nn.LSTM(
-            input_size=config.input_dim,
-            hidden_size=config.hidden_sizes,
-            num_layers=config.num_layers,
+        # LSTM layers with per-layer hidden sizes
+        hs1, hs2, hs3 = self.config.hidden_sizes[:3]
+        direction_multiplier = 2  # bidirectional
+
+        self.lstm1 = nn.LSTM(
+            input_size=self.config.input_dim,
+            hidden_size=hs1,
+            num_layers=1,
             batch_first=True,
-            bidirectional=config.bidirectional,
-            dropout=config.dropout if config.num_layers > 1 else 0.0,
+            bidirectional=True,
+        )
+        self.lstm2 = nn.LSTM(
+            input_size=hs1 * direction_multiplier,
+            hidden_size=hs2,
+            num_layers=1,
+            batch_first=True,
+            bidirectional=True,
+        )
+        self.lstm3 = nn.LSTM(
+            input_size=hs2 * direction_multiplier,
+            hidden_size=hs3,
+            num_layers=1,
+            batch_first=True,
+            bidirectional=True,
         )
 
-        lstm_output_size = (
-            config.hidden_sizes * 2 if config.bidirectional else config.hidden_sizes
-        )
+        # Dropout between LSTM layers (num_layers=1 in each LSTM, so internal dropout is ignored)
+        self.dropout = nn.Dropout(self.config.dropout)
+
+        lstm_output_size = hs3 * direction_multiplier
 
         # Aggregation layer
         if config.aggregation == "attn":
@@ -505,24 +523,8 @@ class BiLSTMRegressor(nn.Module):
         else:
             self.aggregation = None
 
-        # MLP head
-        mlp_layers = []
-        current_size = lstm_output_size
-
-        if config.mlp_hidden:
-            if config.use_layer_norm:
-                mlp_layers.append(nn.LayerNorm(current_size))
-            mlp_layers.extend(
-                [
-                    nn.Linear(current_size, config.mlp_hidden),
-                    nn.ReLU(),
-                    nn.Dropout(config.dropout),
-                ]
-            )
-            current_size = config.mlp_hidden
-
-        mlp_layers.append(nn.Linear(current_size, 1))
-        self.head = nn.Sequential(*mlp_layers)
+        # Output head: single linear readout (no hidden MLP)
+        self.head = nn.Linear(lstm_output_size, 1)
 
     def forward(self, tokens: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
         """Forward pass through the model."""
@@ -533,38 +535,53 @@ class BiLSTMRegressor(nn.Module):
             tokens, lengths.cpu(), batch_first=True, enforce_sorted=False
         )
 
-        # LSTM forward pass
-        packed_output, (hidden, cell) = self.lstm(packed)
-        lstm_output, _ = pad_packed_sequence(packed_output, batch_first=True)
+        # LSTM forward pass through 3 stacked bidirectional layers with dropout between layers
+        packed_out1, _ = self.lstm1(packed)
+        packed_out1 = torch.nn.utils.rnn.PackedSequence(
+            self.dropout(packed_out1.data),
+            packed_out1.batch_sizes,
+            packed_out1.sorted_indices,
+            packed_out1.unsorted_indices,
+        )
+
+        packed_out2, _ = self.lstm2(packed_out1)
+        packed_out2 = torch.nn.utils.rnn.PackedSequence(
+            self.dropout(packed_out2.data),
+            packed_out2.batch_sizes,
+            packed_out2.sorted_indices,
+            packed_out2.unsorted_indices,
+        )
+
+        packed_out3, (hidden3, cell3) = self.lstm3(packed_out2)
+        lstm_output, _ = pad_packed_sequence(packed_out3, batch_first=True)
+
+        # Final layer states
+        hidden, cell = hidden3, cell3
 
         # Aggregate sequence representation
         if self.config.aggregation == "last":
-            # Use last hidden states from both directions
-            if self.config.bidirectional:
-                # Concatenate forward and backward final states
-                representation = torch.cat([hidden[-2], hidden[-1]], dim=1)
-            else:
-                representation = hidden[-1]
+            # Use last hidden states from both directions (always bidirectional)
+            representation = torch.cat([hidden[-2], hidden[-1]], dim=1)
 
-        elif self.config.aggregation == "mean":
-            # Mean pooling over valid tokens
-            mask = torch.arange(lstm_output.shape[1], device=tokens.device).unsqueeze(
-                0
-            ).expand(batch_size, -1) < lengths.unsqueeze(1)
-            masked_output = lstm_output * mask.unsqueeze(-1)
-            representation = masked_output.sum(dim=1) / lengths.unsqueeze(-1).float()
-
-        elif self.config.aggregation == "max":
-            # Max pooling over valid tokens
-            mask = torch.arange(lstm_output.shape[1], device=tokens.device).unsqueeze(
-                0
-            ).expand(batch_size, -1) < lengths.unsqueeze(1)
-            masked_output = lstm_output.masked_fill(~mask.unsqueeze(-1), float("-inf"))
-            representation = masked_output.max(dim=1)[0]
-
-        elif self.config.aggregation == "attn":
-            # Attention-based aggregation
-            representation = self.aggregation(lstm_output, lengths)
+        # elif self.config.aggregation == "mean":
+        #     # Mean pooling over valid tokens
+        #     mask = torch.arange(lstm_output.shape[1], device=tokens.device).unsqueeze(
+        #         0
+        #     ).expand(batch_size, -1) < lengths.unsqueeze(1)
+        #     masked_output = lstm_output * mask.unsqueeze(-1)
+        #     representation = masked_output.sum(dim=1) / lengths.unsqueeze(-1).float()
+        #
+        # elif self.config.aggregation == "max":
+        #     # Max pooling over valid tokens
+        #     mask = torch.arange(lstm_output.shape[1], device=tokens.device).unsqueeze(
+        #         0
+        #     ).expand(batch_size, -1) < lengths.unsqueeze(1)
+        #     masked_output = lstm_output.masked_fill(~mask.unsqueeze(-1), float("-inf"))
+        #     representation = masked_output.max(dim=1)[0]
+        #
+        # elif self.config.aggregation == "attn":
+        #     # Attention-based aggregation
+        #     representation = self.aggregation(lstm_output, lengths)
 
         else:
             raise ValueError(f"Unknown aggregation method: {self.config.aggregation}")
