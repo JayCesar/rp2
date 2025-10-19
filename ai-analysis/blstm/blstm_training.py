@@ -24,8 +24,11 @@ pip install torch numpy polars
 
 import logging
 import sys
-from typing import Literal
 from pathlib import Path
+from typing import Literal
+
+project_root = Path(__file__).parent.parent.parent
+assert project_root.name == "rp2"
 
 
 # Check for required packages and provide installation instructions
@@ -70,22 +73,23 @@ if not check_dependencies():
     sys.exit(1)
 
 # Now import the required packages
+from pathlib import Path
+
 import numpy as np
 import polars as pl
+import polars.selectors as cs
 import sklearn.model_selection
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
-from pathlib import Path
 
 # Import our modules
 sys.path.append(".")
 from blstm import (
     BiLSTMRegressor,
     ModelConfig,
-    TrainConfig,
     SerializationConfig,
     TargetScaler,
+    TrainConfig,
     get_device,
     set_seed,
 )
@@ -141,7 +145,6 @@ def collate_batch(batch):
 
     # Pad sequences to same length (for LSTM batch processing)
     # Since all sequences have length 1, this is straightforward
-    from torch.nn.utils.rnn import pad_sequence
 
     # Stack tensors with proper batch dimension
     # tokens: [batch_size, max_seq_len, input_dim] = [batch_size, 1, 768]
@@ -200,101 +203,101 @@ def create_data_loader(
         )
 
 
-class Component1BLSTM(nn.Module):
-    """
-    Component 1 Bidirectional LSTM Model based on CLaRiCe specifications.
-
-    Architecture:
-    - 3 layers with hidden sizes: 10, 26, 21
-    - Bidirectional LSTM
-    - Dropout rate: 1.64e-01
-    """
-
-    def __init__(self, input_dim: int = 768):
-        super().__init__()
-
-        self.input_dim = input_dim
-        self.dropout_rate = 1.64e-01  # 1,64e-01 from specs
-
-        # Component 1: 3 layers, units: 10/26/21
-        self.hidden_sizes = [10, 26, 21]
-        self.num_layers = 3
-
-        # Build LSTM layers
-        self.lstm_layers = nn.ModuleList()
-        current_input_dim = input_dim
-
-        for hidden_size in self.hidden_sizes:
-            lstm = nn.LSTM(
-                input_size=current_input_dim,
-                hidden_size=hidden_size,
-                num_layers=1,
-                batch_first=True,
-                bidirectional=True,
-                dropout=0.0,  # We'll apply dropout manually between layers
-            )
-            self.lstm_layers.append(lstm)
-
-            # Next layer input is bidirectional output
-            current_input_dim = hidden_size * 2
-
-        # Dropout layers between LSTM layers
-        self.dropout_layers = nn.ModuleList(
-            [nn.Dropout(self.dropout_rate) for _ in range(len(self.hidden_sizes) - 1)]
-        )
-
-        # Final output layer
-        final_hidden_dim = self.hidden_sizes[-1] * 2  # *2 for bidirectional
-        self.output_layer = nn.Sequential(
-            nn.Dropout(self.dropout_rate),
-            nn.Linear(final_hidden_dim, 64),
-            nn.ReLU(),
-            nn.Dropout(self.dropout_rate),
-            nn.Linear(64, 1),
-        )
-
-    def forward(self, x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass through Component 1 BLSTM.
-
-        Args:
-            x: Input tensor [batch_size, seq_len, input_dim]
-            lengths: Actual sequence lengths [batch_size]
-
-        Returns:
-            Output predictions [batch_size, 1]
-        """
-        current_input = x
-
-        # Pass through each LSTM layer
-        for i, lstm_layer in enumerate(self.lstm_layers):
-            # Pack sequences for LSTM efficiency
-            packed = nn.utils.rnn.pack_padded_sequence(
-                current_input, lengths.cpu(), batch_first=True, enforce_sorted=False
-            )
-            packed_output, _ = lstm_layer(packed)
-            current_input, _ = nn.utils.rnn.pad_packed_sequence(
-                packed_output, batch_first=True
-            )
-
-            # Apply dropout between layers (except after the last layer)
-            if i < len(self.lstm_layers) - 1:
-                current_input = self.dropout_layers[i](current_input)
-
-        # Use last hidden state from the final bidirectional LSTM
-        # current_input shape: [batch_size, seq_len, hidden_size * 2]
-        batch_size = current_input.size(0)
-        final_hidden = torch.zeros(
-            batch_size, current_input.size(2), device=current_input.device
-        )
-
-        for b in range(batch_size):
-            actual_length = min(lengths[b].item(), current_input.size(1))
-            final_hidden[b] = current_input[b, actual_length - 1, :]
-
-        # Final prediction
-        output = self.output_layer(final_hidden)
-        return output
+# class Component1BLSTM(nn.Module):
+#     """
+#     Component 1 Bidirectional LSTM Model based on CLaRiCe specifications.
+#
+#     Architecture:
+#     - 3 layers with hidden sizes: 10, 26, 21
+#     - Bidirectional LSTM
+#     - Dropout rate: 1.64e-01
+#     """
+#
+#     def __init__(self, input_dim: int = 768):
+#         super().__init__()
+#
+#         self.input_dim = input_dim
+#         self.dropout_rate = 1.64e-01  # 1,64e-01 from specs
+#
+#         # Component 1: 3 layers, units: 10/26/21
+#         self.hidden_sizes = [10, 26, 21]
+#         self.num_layers = 3
+#
+#         # Build LSTM layers
+#         self.lstm_layers = nn.ModuleList()
+#         current_input_dim = input_dim
+#
+#         for hidden_size in self.hidden_sizes:
+#             lstm = nn.LSTM(
+#                 input_size=current_input_dim,
+#                 hidden_size=hidden_size,
+#                 num_layers=1,
+#                 batch_first=True,
+#                 bidirectional=True,
+#                 dropout=0.0,  # We'll apply dropout manually between layers
+#             )
+#             self.lstm_layers.append(lstm)
+#
+#             # Next layer input is bidirectional output
+#             current_input_dim = hidden_size * 2
+#
+#         # Dropout layers between LSTM layers
+#         self.dropout_layers = nn.ModuleList(
+#             [nn.Dropout(self.dropout_rate) for _ in range(len(self.hidden_sizes) - 1)]
+#         )
+#
+#         # Final output layer
+#         final_hidden_dim = self.hidden_sizes[-1] * 2  # *2 for bidirectional
+#         self.output_layer = nn.Sequential(
+#             nn.Dropout(self.dropout_rate),
+#             nn.Linear(final_hidden_dim, 64),
+#             nn.ReLU(),
+#             nn.Dropout(self.dropout_rate),
+#             nn.Linear(64, 1),
+#         )
+#
+#     def forward(self, x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
+#         """
+#         Forward pass through Component 1 BLSTM.
+#
+#         Args:
+#             x: Input tensor [batch_size, seq_len, input_dim]
+#             lengths: Actual sequence lengths [batch_size]
+#
+#         Returns:
+#             Output predictions [batch_size, 1]
+#         """
+#         current_input = x
+#
+#         # Pass through each LSTM layer
+#         for i, lstm_layer in enumerate(self.lstm_layers):
+#             # Pack sequences for LSTM efficiency
+#             packed = nn.utils.rnn.pack_padded_sequence(
+#                 current_input, lengths.cpu(), batch_first=True, enforce_sorted=False
+#             )
+#             packed_output, _ = lstm_layer(packed)
+#             current_input, _ = nn.utils.rnn.pad_packed_sequence(
+#                 packed_output, batch_first=True
+#             )
+#
+#             # Apply dropout between layers (except after the last layer)
+#             if i < len(self.lstm_layers) - 1:
+#                 current_input = self.dropout_layers[i](current_input)
+#
+#         # Use last hidden state from the final bidirectional LSTM
+#         # current_input shape: [batch_size, seq_len, hidden_size * 2]
+#         batch_size = current_input.size(0)
+#         final_hidden = torch.zeros(
+#             batch_size, current_input.size(2), device=current_input.device
+#         )
+#
+#         for b in range(batch_size):
+#             actual_length = min(lengths[b].item(), current_input.size(1))
+#             final_hidden[b] = current_input[b, actual_length - 1, :]
+#
+#         # Final prediction
+#         output = self.output_layer(final_hidden)
+#         return output
 
 
 def create_component1_config(
@@ -303,11 +306,13 @@ def create_component1_config(
     """Create ModelConfig for Component 1 based on Portuguese specifications."""
     if type == "vectorized_essays":
         return ModelConfig(
+            hidden_sizes=[10, 26, 21],
             input_dim=768,
         )
     if type == "features":
         return ModelConfig(
-            input_dim=,
+            hidden_sizes=[10, 26, 21],
+            input_dim=30,
         )
 
 
@@ -319,7 +324,7 @@ def create_training_config() -> TrainConfig:
 def split_real_dataset(
     dataset: EssayDataset,
     # train_ratio: float = 0.7,
-    val_ratio: float = 0.15,
+    val_ratio: float = 0.10,
     test_ratio: float = 0.15,
     seed: int = 42,
 ):
@@ -342,7 +347,18 @@ def split_real_dataset(
 
     # Second split: val vs test from temp_indices
     temp_scores = [scores[i] for i in temp_indices]
-    temp_stratify_groups = [max(0, min(4, (score - 1) // 50)) for score in temp_scores]
+    temp_stratify_groups = [
+        0
+        if score <= 49
+        else 1
+        if score <= 99
+        else 2
+        if score <= 149
+        else 3
+        if score <= 199
+        else 4
+        for score in temp_scores
+    ]
 
     val_proportion = val_ratio / (val_ratio + test_ratio)
     val_indices, test_indices = sklearn.model_selection.train_test_split(
@@ -358,6 +374,7 @@ def split_real_dataset(
 
     # Create subset datasets
     train_dataset = EssayDataset(pl.DataFrame(dataset.__getitems__(train_indices)))
+    print(train_dataset)
     val_dataset = EssayDataset(pl.DataFrame(dataset.__getitems__(val_indices)))
     test_dataset = EssayDataset(pl.DataFrame(dataset.__getitems__(test_indices)))
 
@@ -381,14 +398,13 @@ def train_component1_standard(
     input_type: Literal["vectorized_essays", "features"],
 ) -> dict[str, float]:
     """Train Component 1 using the standard BiLSTMRegressor."""
-    logger.info("Training Component 1 with Standard BiLSTMRegressor on Real Data")
+    logger.info(f"Training Component 1 with Standard BiLSTMRegressor on {input_type}")
 
     # Split dataset
     train_dataset, val_dataset, test_dataset = split_real_dataset(dataset, seed=42)
 
-    # Setup target scaler using all data (no scaling like BERT)
     all_scores = dataset.data["c1"].to_numpy()
-    target_scaler = TargetScaler("none")  # No scaling to match BERT approach
+    target_scaler = TargetScaler("none")
     target_scaler.fit(np.array(all_scores))
 
     # Create configurations
@@ -419,7 +435,7 @@ def train_component1_standard(
     logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
 
     # Setup training
-    output_dir = Path(__file__).parent / "runs" / "blstm_component1_real_data"
+    output_dir = Path(__file__).parent / "runs" / input_type / "blstm_model"
     serialization_config = SerializationConfig(
         output_dir=output_dir, save_best_only=True, keep_last_k=3
     )
@@ -460,8 +476,8 @@ def train_component1_standard(
             f.write(f"- Training set: {len(train_dataset)}\n")
             f.write(f"- Validation set: {len(val_dataset)}\n")
             f.write(f"- Test set: {len(test_dataset)}\n")
-            f.write(f"- Essay vector dimension: 768\n")
-            f.write(f"- C1 score range: 0-200\n\n")
+            f.write("- Essay vector dimension: 768\n")
+            f.write("- C1 score range: 0-200\n\n")
             f.write(f"Model Configuration:\n{model_config.to_dict()}\n\n")
             f.write(f"Training Configuration:\n{train_config.to_dict()}\n\n")
             f.write(f"Best Validation Metrics:\n{best_metrics}\n\n")
@@ -470,7 +486,12 @@ def train_component1_standard(
                 f.write(
                     f"  Epoch {entry['epoch']}: "
                     f"Train Loss={entry['train_loss']:.6f}, "
+                    f"Val MAE={entry['val_mae']:.2f}, "
                     f"Val RMSE={entry['val_rmse']:.2f}, "
+                    f"Val Kappa={entry['val_kappa']:.2f}, "
+                    f"Val QWK={entry['val_qwk']:.2f}, "
+                    f"Val R²={entry['val_r2']:.2f}, "
+                    f"Val Pearson={entry['val_pearson_corr']:.2f}, "
                     f"Val Step Acc={entry['val_step_accuracy']:.3f}, "
                     f"Time={entry['epoch_time']:.1f}s\n"
                 )
@@ -483,9 +504,11 @@ def train_component1_standard(
         return {}
 
 
-def show_and_save_metrics(best_metrics: dict[str, float], model_save_path: Path) -> None:
+def show_and_save_metrics(
+    best_metrics: dict[str, float], model_save_path: Path
+) -> None:
     """Show and save metrics."""
-    logger.info(f"Training completed successfully")
+    logger.info("Training completed successfully")
 
     # BERT-style final metrics display
     print("\nFinal validation metrics:")
@@ -503,9 +526,7 @@ def show_and_save_metrics(best_metrics: dict[str, float], model_save_path: Path)
         f"Final validation metrics saved to {model_save_path / 'final_validation_metrics.csv'}"
     )
 
-    best_metrics_df.write_parquet(
-        model_save_path / "final_validation_metrics.parquet"
-    )
+    best_metrics_df.write_parquet(model_save_path / "final_validation_metrics.parquet")
     print(
         f"Final validation metrics saved to {model_save_path / 'final_validation_metrics.parquet'}"
     )
@@ -538,6 +559,135 @@ def show_and_save_metrics(best_metrics: dict[str, float], model_save_path: Path)
     print(f"Model saved to: {model_save_path}")
 
 
+def train_on_vectorized_essays(device: torch.device) -> None:
+    """Train Component 1 using the standard BiLSTMRegressor."""
+    logger.info(
+        "Training Component 1 with Standard BiLSTMRegressor on Vectorized Essays"
+    )
+
+    # Load real essay data - try parquet first, then JSON as fallback
+    parquet_file = (
+        project_root
+        / "generated_datasets"
+        / "extended_essay-br_preprocessed_for_BLSTM.parquet"
+    )
+    json_file = (
+        project_root
+        / "generated_datasets"
+        / "extended_essay-br_preprocessed_for_BLSTM.json"
+    )
+
+    data_file = None
+    if Path(parquet_file).exists():
+        data_file = parquet_file
+        logger.info(f"Using parquet file: {data_file}")
+    elif Path(json_file).exists():
+        data_file = json_file
+        logger.info(f"Using JSON file: {data_file}")
+    else:
+        logger.error(f"Data file not found. Looked for: {parquet_file} and {json_file}")
+        exit(1)
+
+    # Load dataset with optional sample limit for testing
+    max_samples = None  # Set to None to use all samples
+    relevant_columns = "c1", "essay_vector"
+    DEFAULT_MAX_SAMPLE_SIZE = 2**31 - 1
+    dataset = (
+        pl.scan_parquet(data_file)
+        .select(relevant_columns)
+        .head(max_samples if max_samples is not None else DEFAULT_MAX_SAMPLE_SIZE)
+        .drop_nulls()
+        .unique()
+        .collect()
+    )
+    logger.info(f"Loaded dataset with {len(dataset)} essays: {dataset.head(10)}")
+
+    dataset = EssayDataset(dataset)
+
+    # Train using standard BiLSTMRegressor (approximated specifications)
+    logger.info("\n" + "=" * 70)
+    logger.info("TRAINING WITH STANDARD BiLSTMRegressor")
+    logger.info("=" * 70)
+
+    input_type = "vectorized_essays"
+    best_metrics = train_component1_standard(dataset, device, input_type)
+
+    # # Check if training was actually successful (non-empty metrics dict)
+    # training_successful = all(
+    #     len(best_metrics[input_type]) > 0 for input_type in input_types
+    # )
+    #
+    # if training_successful:
+
+    model_save_path_vectorized_essays = (
+        Path(__file__).parent / "runs" / input_type / "blstm_model"
+    )
+    show_and_save_metrics(best_metrics, model_save_path_vectorized_essays)
+
+
+def train_on_features(device: torch.device) -> None:
+    """Train Component 1 using the standard BiLSTMRegressor."""
+    logger.info("Training Component 1 with Standard BiLSTMRegressor on Features")
+
+    # Load real essay data - try parquet first, then JSON as fallback
+    parquet_file = (
+        project_root
+        / "generated_datasets"
+        / "dataset_with_languagetool_metrics.parquet"
+    )
+    json_file = (
+        project_root / "generated_datasets" / "dataset_with_languagetool_metrics.json"
+    )
+
+    data_file = None
+    if Path(parquet_file).exists():
+        data_file = parquet_file
+        logger.info(f"Using parquet file: {data_file}")
+    elif Path(json_file).exists():
+        data_file = json_file
+        logger.info(f"Using JSON file: {data_file}")
+    else:
+        logger.error(f"Data file not found. Looked for: {parquet_file} and {json_file}")
+        exit(1)
+
+    # Load dataset with optional sample limit for testing
+    max_samples = None  # Set to None to use all samples
+    # Select all SCREAMING_SNAKE_CASE feature columns plus the target 'c1'
+    relevant_columns = [pl.col("c1"), cs.matches(r"^[A-Z0-9_]+$")]
+    DEFAULT_MAX_SAMPLE_SIZE = 2**31 - 1
+    dataset = (
+        pl.scan_parquet(data_file)
+        .select(relevant_columns)
+        .head(max_samples if max_samples is not None else DEFAULT_MAX_SAMPLE_SIZE)
+        .drop_nulls()
+        .unique()
+        .collect()
+    )
+    logger.info(f"Loaded dataset with {len(dataset)} essays: {dataset.head(10)}")
+
+    dataset = EssayDataset(dataset)
+
+    # Train using standard BiLSTMRegressor (approximated specifications)
+    logger.info("\n" + "=" * 70)
+    logger.info("TRAINING WITH STANDARD BiLSTMRegressor")
+    logger.info("=" * 70)
+
+    input_type = "features"
+    best_metrics = train_component1_standard(dataset, device, input_type)
+
+    # # Check if training was actually successful (non-empty metrics dict)
+    # training_successful = all(
+    #     len(best_metrics[input_type]) > 0 for input_type in input_types
+    # )
+    #
+    # if training_successful:
+
+    model_save_path_features = (
+        Path(__file__).parent / "runs" / input_type / "blstm_model"
+    )
+    show_and_save_metrics(best_metrics, model_save_path_features)
+
+
 def main():
     """Main training workflow for Component 1 Portuguese BLSTM specifications with real data."""
     print(f"\n{'=' * 50}")
@@ -553,60 +703,13 @@ def main():
     logger.info(f"Using device: {device}")
 
     # Initialize model_save_path to ensure it's always defined
-    model_save_path_vectorized_essays = Path(__file__).parent / "runs" / "vectorized_essays" / "blstm_model"
-    model_save_path_features = Path(__file__).parent / "runs" / "features" / "blstm_model"
-
-    # Load real essay data - try parquet first, then JSON as fallback
-    parquet_file = "generated_datasets/extended_essay-br_preprocessed_for_BLSTM.parquet"
-    json_file = "generated_datasets/extended_essay-br_preprocessed_for_BLSTM.json"
-
-    data_file = None
-    if Path(parquet_file).exists():
-        data_file = parquet_file
-        logger.info(f"Using parquet file: {data_file}")
-    elif Path(json_file).exists():
-        data_file = json_file
-        logger.info(f"Using JSON file: {data_file}")
-    else:
-        logger.error(f"Data file not found. Looked for: {parquet_file} and {json_file}")
-        return 1
+    model_save_path_features = (
+        Path(__file__).parent / "runs" / "features" / "blstm_model"
+    )
 
     try:
-        # Load dataset with optional sample limit for testing
-        max_samples = None  # Set to None to use all samples
-        relevant_columns = "c1", "essay_vector"
-        DEFAULT_MAX_SAMPLE_SIZE = 2**31 - 1
-        dataset = EssayDataset(
-            pl.scan_parquet(data_file)
-            .select(relevant_columns)
-            .head(max_samples if max_samples is not None else DEFAULT_MAX_SAMPLE_SIZE)
-            .drop_nulls()
-            .unique()
-            .collect()
-        )
-
-        logger.info(f"Loaded dataset with {len(dataset)} essays")
-
-        # Train using standard BiLSTMRegressor (approximated specifications)
-        logger.info("\n" + "=" * 70)
-        logger.info("TRAINING WITH STANDARD BiLSTMRegressor")
-        logger.info("=" * 70)
-
-        input_types = "vectorized_essays", "features"
-        best_metrics = {
-            input_type: train_component1_standard(dataset, device, input_type)
-            for input_type in input_types
-        }
-
-        # # Check if training was actually successful (non-empty metrics dict)
-        # training_successful = all(
-        #     len(best_metrics[input_type]) > 0 for input_type in input_types
-        # )
-        #
-        # if training_successful:
-
-        show_and_save_metrics(best_metrics["vectorized_essays"], model_save_path_vectorized_essays)
-        show_and_save_metrics(best_metrics["features"], model_save_path_vectorized_essays)
+        train_on_vectorized_essays(device)
+        train_on_features(device)
 
         return 0
     # else:
