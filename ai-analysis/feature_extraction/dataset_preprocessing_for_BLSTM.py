@@ -84,10 +84,10 @@ def load_and_preprocess_dataset(csv_path) -> pl.DataFrame:
         .map_batches(
             lambda essays: pl.Series(
                 name="essay_token_embeddings",
-                values=[
+                values=(
                     vectorize_essay(essay, idx).tolist()
                     for idx, essay in enumerate(essays)
-                ],
+                ),
                 dtype=pl.Array(pl.Array(pl.Float32, 768), MAX_LENGTH),
             ),
             return_dtype=pl.Array(pl.Array(pl.Float32, 768), MAX_LENGTH),  # [512, 768]
