@@ -30,7 +30,6 @@ Usage:
 """
 
 import pathlib
-import random
 import re
 from dataclasses import asdict, dataclass
 from typing import Literal
@@ -42,18 +41,26 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 
-# Import shared utilities
-import sys
-sys.path.append(str(pathlib.Path(__file__).parent.parent / "feature_extraction"))
-sys.path.append(str(pathlib.Path(__file__).parent.parent / "blstm"))
-
-from blstm import (
-    MetricsAccumulator,
-    TargetScaler,
-    get_device,
-    set_seed,
-    ensure_dir,
-)
+# Import shared utilities using relative imports
+try:
+    from ..blstm.blstm import (
+        MetricsAccumulator,
+        TargetScaler,
+        ensure_dir,
+        get_device,
+        set_seed,
+    )
+except ImportError:
+    # Fallback for direct script execution
+    import sys
+    sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+    from blstm.blstm import (
+        MetricsAccumulator,
+        TargetScaler,
+        ensure_dir,
+        get_device,
+        set_seed,
+    )
 
 
 # Configuration dataclasses
@@ -162,9 +169,11 @@ class SerializationConfig:
         return cls(**d)
 
 
-# Mask-aware pooling utilities
+# Mask-aware pooling utilities (optimized)
 def masked_maxpool_1d(x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
     """Apply max pooling over time dimension with masking for padding.
+    
+    Optimized to minimize allocations and use efficient broadcasting.
     
     Args:
         x: Input tensor [batch_size, channels, seq_len]
@@ -173,24 +182,23 @@ def masked_maxpool_1d(x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
     Returns:
         Pooled tensor [batch_size, channels]
     """
-    batch_size, channels, seq_len = x.shape
+    # Create mask efficiently using view and comparison
+    # Shape: [1, 1, seq_len] vs [batch_size, 1, 1]
+    mask = (
+        torch.arange(x.shape[2], device=x.device, dtype=torch.long)
+        .view(1, 1, -1)
+        < lengths.view(-1, 1, 1)
+    )
     
-    # Create mask: [batch_size, 1, seq_len]
-    mask = torch.arange(seq_len, device=x.device).unsqueeze(0).unsqueeze(0)
-    mask = mask < lengths.unsqueeze(1).unsqueeze(2)
-    
-    # Set padded positions to -inf
-    x_masked = x.masked_fill(~mask, float("-inf"))
-    
-    # Max pool over sequence dimension
-    pooled, _ = torch.max(x_masked, dim=2)  # [batch_size, channels]
-    
-    return pooled
+    # Set padded positions to -inf and return max (ignore indices)
+    return x.masked_fill(~mask, float("-inf")).max(dim=2)[0]
 
 
 def masked_avgpool_1d(x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
     """Apply average pooling over time dimension with masking for padding.
     
+    Optimized to use efficient operations and minimize memory.
+    
     Args:
         x: Input tensor [batch_size, channels, seq_len]
         lengths: Valid sequence lengths [batch_size]
@@ -198,22 +206,15 @@ def masked_avgpool_1d(x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
     Returns:
         Pooled tensor [batch_size, channels]
     """
-    batch_size, channels, seq_len = x.shape
+    # Create mask efficiently
+    mask = (
+        torch.arange(x.shape[2], device=x.device, dtype=torch.long)
+        .view(1, 1, -1)
+        < lengths.view(-1, 1, 1)
+    )
     
-    # Create mask: [batch_size, 1, seq_len]
-    mask = torch.arange(seq_len, device=x.device).unsqueeze(0).unsqueeze(0)
-    mask = mask < lengths.unsqueeze(1).unsqueeze(2)
-    
-    # Zero out padded positions
-    x_masked = x * mask.float()
-    
-    # Sum over sequence and divide by valid lengths
-    sum_pooled = torch.sum(x_masked, dim=2)  # [batch_size, channels]
-    lengths_clamped = lengths.clamp(min=1).unsqueeze(1).float()  # [batch_size, 1]
-    
-    avg_pooled = sum_pooled / lengths_clamped  # [batch_size, channels]
-    
-    return avg_pooled
+    # Sum and divide by lengths (clamped to avoid division by zero)
+    return (x * mask).sum(dim=2) / lengths.view(-1, 1).clamp(min=1).float()
 
 
 # Model architecture

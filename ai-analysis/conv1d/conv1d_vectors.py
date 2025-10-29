@@ -17,22 +17,23 @@ import torch
 # Setup paths
 script_path = pathlib.Path(__file__).resolve()
 project_root = script_path.parent.parent.parent
-sys.path.append(str(project_root / "ai-analysis" / "feature_extraction"))
-sys.path.append(str(project_root / "ai-analysis" / "blstm"))
-sys.path.append(str(project_root / "ai-analysis" / "conv1d"))
 
-from utils import logger
-from blstm import get_device, set_seed, TargetScaler, MetricsAccumulator
+# Add ai-analysis to path for imports
+if str(project_root / "ai-analysis") not in sys.path:
+    sys.path.insert(0, str(project_root / "ai-analysis"))
+
+from feature_extraction.utils import logger
+from blstm.blstm import MetricsAccumulator, TargetScaler, get_device, set_seed
 from conv1d import (
     Conv1DRegressor,
-    ModelConfig,
-    TrainConfig,
-    SerializationConfig,
     EssayDataset,
+    ModelConfig,
+    SerializationConfig,
+    TrainConfig,
+    Trainer,
     create_data_loader,
     split_dataset,
 )
-from trainer import Trainer
 
 
 def main():

@@ -20,7 +20,6 @@ Usage:
 """
 
 import pathlib
-import sys
 import time
 
 import polars as pl
@@ -29,13 +28,18 @@ import torch.nn as nn
 import tqdm
 from torch.utils.data import DataLoader
 
-# Import utilities
-sys.path.append(str(pathlib.Path(__file__).parent.parent / "feature_extraction"))
-sys.path.append(str(pathlib.Path(__file__).parent.parent / "blstm"))
-
-from utils import logger
-from blstm import MetricsAccumulator, TargetScaler, ensure_dir
-from conv1d import ModelConfig, TrainConfig, SerializationConfig
+# Import utilities using relative imports
+try:
+    from ..feature_extraction.utils import logger
+    from ..blstm.blstm import MetricsAccumulator, TargetScaler, ensure_dir
+    from .conv1d import ModelConfig, SerializationConfig, TrainConfig
+except ImportError:
+    # Fallback for direct script execution
+    import sys
+    sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+    from feature_extraction.utils import logger
+    from blstm.blstm import MetricsAccumulator, TargetScaler, ensure_dir
+    from conv1d import ModelConfig, SerializationConfig, TrainConfig
 
 
 class Trainer:

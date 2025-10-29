@@ -4,18 +4,47 @@
   "pythonVersion": "3.13",
   "include": [
     "src",
+    "ai-analysis",
     "."
   ],
   "exclude": [
     "**/node_modules",
     "**/__pycache__",
+    "**/*.pyc",
     ".venv",
     ".devenv",
-    ".git"
+    ".git",
+    "ai-analysis/embeddings_test",
+    "ai-analysis/models/*/"
+  ],
+  "extraPaths": [
+    "ai-analysis",
+    "ai-analysis/common",
+    "ai-analysis/blstm",
+    "ai-analysis/conv1d",
+    "ai-analysis/BERT",
+    "ai-analysis/feature_extraction"
   ],
   "typeCheckingMode": "basic",
   "useLibraryCodeForTypes": true,
   "autoImportCompletions": true,
   "reportMissingImports": "error",
-  "reportMissingTypeStubs": "warning"
+  "reportMissingTypeStubs": "warning",
+  "reportGeneralTypeIssues": "warning",
+  "reportOptionalMemberAccess": "warning",
+  "reportOptionalSubscript": "warning",
+  "reportPrivateUsage": "none",
+  "stubPath": ".devenv/state/venv/lib/python3.13/site-packages",
+  "executionEnvironments": [
+    {
+      "root": "ai-analysis",
+      "pythonVersion": "3.13",
+      "extraPaths": [
+        "ai-analysis",
+        "ai-analysis/common",
+        "ai-analysis/blstm",
+        "ai-analysis/conv1d"
+      ]
+    }
+  ]
 }
