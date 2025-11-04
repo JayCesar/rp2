@@ -18,7 +18,7 @@ from .shared.json import json_dealer
 # ========================================== #
 #  CONFIGURAÇÕES DE PERFORMANCE E SEGURANÇA  #
 # ========================================== #
-MAX_WORKERS = 200 
+MAX_WORKERS = 200
 FILE_LOCK = threading.Lock()
 
 CONTROLE_DIR = os.path.join("gemini_analysis", "controle")
@@ -31,6 +31,8 @@ def run():
     dict_redacoes: Dict[int, Redacao] = create_redacoes_dict()
 
     avaliacoes_redacoes: Dict = json_dealer(AVALIACOES_PATH, 'read')
+    if avaliacoes_redacoes == None:
+        return
     ids_avaliados: Dict[str, List[int]] = json_dealer(IDS_AVALIADOS_PATH, 'read')
 
     from .keys import genai_key
