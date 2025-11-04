@@ -1,0 +1,1 @@
+Remoção da análise da nota final, buscando que a análise focasse apenas na competência 1
