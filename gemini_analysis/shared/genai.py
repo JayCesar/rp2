@@ -1,5 +1,7 @@
 import logging
 
+import httpx
+
 from google import genai
 from google.genai import types, Client
 
@@ -34,6 +36,10 @@ def generate(client: Client, input: str, instructions: str = None) -> str:
         )
 
         return response.text
+
+    except httpx.ReadError as e:
+        logging.error(f"Erro ao gerar resposta: {e}")
+        return ""
 
     except Exception as e:
         logging.error(f"Erro ao gerar resposta: {e}", exc_info=True)
