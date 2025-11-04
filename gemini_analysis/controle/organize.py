@@ -29,8 +29,10 @@ def check_avaliacoes_restantes():
         print("Todas as avaliações foram concluídas.")
         return
 
-    print(f"Avaliações pendentes: {pending}")
-
+    if len(pending) >= 100:
+        print(f"Mais de 100 avaliações pendentes: {len(pending)} avaliações")
+    else:
+        print(f"Avaliações pendentes: {pending}")
 
 if __name__ == "__main__":
     organize_avaliacoes()
