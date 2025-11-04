@@ -13,16 +13,18 @@ def organize_avaliacoes():
     json_dealer(IDS_AVALIADOS_PATH, 'write', lista_avaliadas)
 
     avaliacoes = json_dealer(AVALIACOES_PATH, 'read')
-    itens_ordenados = dict(sorted(avaliacoes.items()))
+    itens_ordenados = dict(sorted(avaliacoes.items(), key=lambda item: int(item[0])))
     json_dealer(AVALIACOES_PATH, 'write', itens_ordenados)
 
 def check_avaliacoes_restantes():
 
+    dict_avaliacoes = json_dealer(AVALIACOES_PATH, 'read')
     lista_avaliadas = json_dealer(IDS_AVALIADOS_PATH, 'read')
     pending = []
     
     for i in range(0, 6577):
-        if i not in lista_avaliadas['redacoes_avaliadas']:
+        id_str = str(i)
+        if i not in lista_avaliadas['redacoes_avaliadas'] or id_str not in dict_avaliacoes.keys():
             pending.append(i)
     
     if len(pending) == 0:
