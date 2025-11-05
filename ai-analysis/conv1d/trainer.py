@@ -171,7 +171,7 @@ class Trainer:
             
             # Forward pass with AMP
             if self.use_amp:
-                with torch.cuda.amp.autocast(enabled=True, dtype=self.train_config.amp_dtype):
+                with torch.autocast("cuda",enabled=True, dtype=self.train_config.amp_dtype):
                     predictions = self.model(tokens, lengths)
                     loss = self.criterion(predictions, targets_scaled)
             else:
@@ -229,7 +229,7 @@ class Trainer:
                 
                 # Forward pass with AMP
                 if self.use_amp:
-                    with torch.cuda.amp.autocast(enabled=True, dtype=self.train_config.amp_dtype):
+                    with torch.autocast("cuda",enabled=True, dtype=self.train_config.amp_dtype):
                         predictions = self.model(tokens, lengths)
                 else:
                     predictions = self.model(tokens, lengths)

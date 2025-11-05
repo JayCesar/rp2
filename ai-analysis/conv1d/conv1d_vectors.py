@@ -158,7 +158,7 @@ def main():
             ids = batch["ids"]
             
             if device.type == "cuda":
-                with torch.cuda.amp.autocast(enabled=True, dtype=torch.bfloat16):
+                with torch.autocast("cuda",enabled=True, dtype=torch.bfloat16):
                     predictions = model(tokens, lengths)
             else:
                 predictions = model(tokens, lengths)

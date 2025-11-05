@@ -53,7 +53,8 @@ def essay_metrics(essay_data, total_essay_count):
     if len(lemmas) > 0:
         features_spacy["LEXICAL_DIVERSITY"] = len(set(lemmas)) / len(lemmas)
     else:
-        features_spacy["LEXICAL_DIVERSITY"] = 0
+        # ensure float dtype for consistent schema across rows
+        features_spacy["LEXICAL_DIVERSITY"] = 0.0
 
     # Sentence average length
     if sentence_count:
@@ -62,7 +63,8 @@ def essay_metrics(essay_data, total_essay_count):
             sentence_lengths
         )
     else:
-        features_spacy["AVERAGE_SENTENCE_LENGTH"] = 0
+        # ensure float dtype for consistent schema across rows
+        features_spacy["AVERAGE_SENTENCE_LENGTH"] = 0.0
 
     COLLOQUIALISMS = ["mano", "tá ligado", "tipo assim", "né", "daora"]
     FORMAL_CONJUNCTIONS = [
@@ -82,7 +84,7 @@ def essay_metrics(essay_data, total_essay_count):
         1 for con in FORMAL_CONJUNCTIONS if con in essay
     )
 
-    return pl.DataFrame(
+    df = pl.DataFrame(
         error_counts
         | essay_data
         | {
@@ -93,6 +95,16 @@ def essay_metrics(essay_data, total_essay_count):
         | features_spacy
         | features_custom
     )
+
+    # enforce float dtypes for spacy-derived ratio features
+    df = df.with_columns(
+        [
+            pl.col("LEXICAL_DIVERSITY").cast(pl.Float64),
+            pl.col("AVERAGE_SENTENCE_LENGTH").cast(pl.Float64),
+        ]
+    )
+
+    return df
 
 
 def essay_token_count(encoded_essay):
