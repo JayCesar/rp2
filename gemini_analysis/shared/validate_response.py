@@ -30,7 +30,7 @@ def validate_and_extract_response(response:str, redacao_obj: Redacao) -> Tuple[b
         return False, redacao_obj
 
 
-    required_keys = ["nota_c1", "justificativa"]
+    required_keys = ["nota_c1"]
     if not all(key in data for key in required_keys):
         logging.error(f"Redação {id_redacao} - JSON sem todos os campos necessários.")
         return False, redacao_obj
@@ -44,6 +44,6 @@ def validate_and_extract_response(response:str, redacao_obj: Redacao) -> Tuple[b
 
     redacao_obj.gemini_nota_c1 = int(data["nota_c1"])
     redacao_obj.gemini_nota_final = int(data["nota_final"])
-    redacao_obj.gemini_descricao = data["justificativa"]
+    redacao_obj.gemini_descricao = data.get("justificativa", None)
 
     return True, redacao_obj
