@@ -5,6 +5,9 @@ from ..models.Redacao import Redacao
 
 def validate_and_extract_response(response:str, redacao_obj: Redacao) -> Tuple[bool, Redacao]:
 
+    if response is None:
+        return False, redacao_obj
+
     id_redacao = redacao_obj.id
 
     data: Dict[str, Any] = {}
