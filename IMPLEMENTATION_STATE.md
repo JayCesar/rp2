@@ -21,11 +21,29 @@
 
 ---
 
+### Completed Steps
+
+#### ✅ Step 2: Audit and Locate Existing BLSTM Code
+- **Status**: Complete
+- **Files Examined**:
+  - `ai-analysis/blstm/blstm.py` - BiLSTMRegressor architecture, configs, metrics
+  - `ai-analysis/blstm/trainer.py` - BiLSTMTrainer with AMP, schedulers, early stopping
+  - `ai-analysis/blstm/blstm_training.py` - Main orchestration functions
+  - `ai-analysis/common/` - Shared utilities (dataset, metrics, device, evaluation)
+- **Key Findings**:
+  - BiLSTMRegressor has 3 LSTM layers with dropout, aggregation, optional MLP head
+  - Trainer uses MAE loss by default, tracks best_val_mae for checkpointing
+  - MetricsAccumulator computes all metrics in score space {0-200}
+  - Existing configs (ModelConfig, TrainConfig, SerializationConfig) are reusable
+  - Dataset returns dict: {"id", "tokens"/"features", "targets", "lengths"}
+- **Updated**: NOTES.md with detailed code audit
+- **Commit**: Pending - `chore(blstm): add code map for CE work`
+
 ### In Progress
 
-#### 🔵 Step 2: Audit and Locate Existing BLSTM Code
+#### 🔵 Step 3: Add Class Mapping Utilities
 - **Status**: Starting next
-- **Goal**: Map existing BiLSTMRegressor, training scripts, configs, metrics
+- **Goal**: Implement score ↔ class index mapping with vectorized support
 
 ---
 

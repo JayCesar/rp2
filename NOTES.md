@@ -73,13 +73,60 @@ Score-to-class mapping for C1 essay scores:
 
 ## Code Map (Updated as implementation progresses)
 
-### Existing BLSTM System
-- `ai-analysis/blstm/blstm.py` - BiLSTMRegressor, configs, metrics, utilities
-- `ai-analysis/blstm/blstm_training.py` - Training functions and main entry point
-- `ai-analysis/blstm/trainer.py` - BiLSTMTrainer class (AMP, schedulers, early stopping)
-- `ai-analysis/blstm/blstm_train_on_features.py` - Features training script
-- `ai-analysis/blstm/blstm_train_on_vectorized_essays.py` - Vectorized essays training script
-- `ai-analysis/common/` - Shared utilities (EssayDataset, collate_batch, etc.)
+### Existing BLSTM System - Detailed Audit
+
+#### Core Model & Configs (`ai-analysis/blstm/blstm.py`)
+- **BiLSTMRegressor**: 3-layer bidirectional LSTM with configurable aggregation
+  - Encoder: token_proj → lstm1/2/3 (with dropout between layers) → aggregation
+  - Aggregation modes: "last", "mean", "max", "attn" (uses AttentionAggregation)
+  - Head: optional MLP + final Linear(hidden_dim, 1) for regression
+  - Forward returns: [batch_size] predictions
+  - Method: `predict_and_optionally_clamp()` for clamping during eval
+- **ModelConfig**: `hidden_sizes`, `input_dim`, `num_layers`, `dropout`, `aggregation`, `mlp_hidden`, `use_layer_norm`, `token_proj_dim`, `output_range`
+- **TrainConfig**: `epochs`, `batch_size`, `lr`, `weight_decay`, `optimizer`, `scheduler`, `plateau_*`, `grad_clip_norm`, `early_stopping_patience`, `seed`, `device`, `use_amp`, `amp_dtype`, `target_scaler`
+- **SerializationConfig**: `output_dir`, `save_best_only`, `keep_last_k`
+- **ScoreConstants**: `MIN=0`, `MAX=200`, `STEP=40`
+- **Utilities**: `snap_to_step()`, `round_to_c1_levels()`, `quadratic_weighted_kappa()`, `get_device()`, `set_seed()`, `ensure_dir()`
+- **MetricsAccumulator**: Computes MAE, RMSE, R², Kappa, QWK, Pearson, step_accuracy, mae_step
+- **TargetScaler**: Modes "none", "minmax", "standard" for target scaling
+
+#### Trainer (`ai-analysis/blstm/trainer.py`)
+- **BiLSTMTrainer**: Complete training loop with AMP, schedulers, early stopping
+  - `_train_epoch()`: Forward, loss (MAE default), backward, grad clip, optimizer step
+  - `_validate()`: Eval mode, compute metrics via MetricsAccumulator
+  - `train()`: Epoch loop, best model tracking (by val_mae), checkpointing
+  - Schedulers: ReduceLROnPlateau, OneCycleLR, or none
+  - Optimizer: AdamW (fused if CUDA available)
+  - AMP: torch.autocast + GradScaler
+  - State: `training_history`, `best_val_predictions`
+
+#### Training Scripts
+- **`blstm_training.py`**: Main orchestration
+  - `create_component1_config()`: Creates ModelConfig for "vectorized_essays" or "features"
+  - `train_component1_standard()`: Splits data, creates loaders, trainer, trains, saves
+  - `train_on_vectorized_essays()`: Loads parquet, creates EssayDataset, calls train
+  - `train_on_features()`: Same for features dataset
+  - Output dirs: `runs/vectorized_essays/blstm_model/`, `runs/features/blstm_model/`
+- **`blstm_train_on_features.py`**: Script wrapper for features (if exists - to verify)
+- **`blstm_train_on_vectorized_essays.py`**: Script wrapper for essays (if exists - to verify)
+
+#### Shared Utilities (`ai-analysis/common/`)
+- **`dataset.py`**: `EssayDataset` - Polars DataFrame wrapper
+- **`data_utils.py`**: `collate_batch()`, `create_data_loader()`, `split_dataset()`
+- **`attention.py`**: `AttentionAggregation` - Attention pooling over sequences
+- **`metrics.py`**: `MetricsAccumulator`, `TargetScaler`
+- **`device.py`**: `get_device()`, `set_seed()`
+- **`io_utils.py`**: `ensure_dir()`, `save_dataset()`
+- **`evaluation.py`**: `save_metrics()`, `save_validation_predictions()`, `format_metrics_log()`
+
+#### Key Patterns to Mirror
+1. **Encoder Reuse**: BiLSTMClassifier should reuse lstm1/2/3 structure exactly
+2. **Config Compatibility**: CE trainer must accept same ModelConfig, TrainConfig, SerializationConfig
+3. **Metrics in Score Space**: Always convert predictions back to {0,40,80,120,160,200} before metrics
+4. **AMP Pattern**: `torch.autocast("cuda", enabled=use_amp)` in forward; GradScaler for backward
+5. **Checkpointing**: Save model_state_dict, optimizer, scheduler, scaler, config, metrics, epoch
+6. **Best Tracking**: Use `best_val_mae` (or same metric as regression) for checkpoint selection
+7. **Dataset Shape**: EssayDataset returns dict with "id", "embedding" (or features), "score"
 
 ### New CE System (To Be Created)
 - `ai-analysis/blstm/blstm_ce.py` - BiLSTMClassifier + mapping utilities
