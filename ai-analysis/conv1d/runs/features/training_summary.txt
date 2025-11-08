@@ -1,0 +1,42 @@
+Conv1D Training on Grammar Error Features
+======================================================================
+
+Features: 32 grammar error metrics
+Architecture: {'conv_filters': [28, 39], 'kernel_sizes': [1, 1], 'input_dim': 32, 'dropout': 0.303, 'dense_neurons': 90, 'pooling': 'max', 'output_range': (0, 200)}
+Training: {'epochs': 50, 'batch_size': 32, 'lr': 0.00706, 'weight_decay': 0.000661, 'optimizer': 'adamw', 'early_stopping_patience': 3, 'use_amp': True, 'amp_dtype': 'torch.bfloat16', 'target_scaler': 'none', 'seed': 42, 'device': 'auto', 'grad_clip_norm': 1.0}
+
+Dataset: Train=4926, Val=656, Test=986
+
+Best Val Metrics: {
+  "loss": 980.8021850585938,
+  "mae": 23.616615295410156,
+  "rmse": 31.31776237487793,
+  "r2": 0.10879236459732056,
+  "kappa": 0.14012614161566805,
+  "qwk": 0.2077503599360817,
+  "pearson_corr": 0.34190836548805237,
+  "step_accuracy": 0.5304878048780488,
+  "mae_step": 21.097560975609756,
+  "count": 656
+}
+Test Metrics: {
+  "loss": 1150.8714599609375,
+  "mae": 25.514705657958984,
+  "rmse": 33.924495697021484,
+  "r2": -0.04316854476928711,
+  "kappa": -0.002379221465864889,
+  "qwk": 0.028467492914851622,
+  "pearson_corr": 0.3246174156665802,
+  "step_accuracy": 0.4695740365111562,
+  "mae_step": 24.421906693711968,
+  "count": 986
+}
+
+Training History (last 10):
+  Epoch 1: Loss=50.7483, MAE=29.72, RMSE=37.78, R²=-0.30, Time=33.3s
+  Epoch 2: Loss=31.3652, MAE=26.19, RMSE=34.43, R²=-0.08, Time=0.8s
+  Epoch 3: Loss=30.0564, MAE=24.69, RMSE=32.27, R²=0.05, Time=0.8s
+  Epoch 4: Loss=29.6087, MAE=23.62, RMSE=31.32, R²=0.11, Time=0.8s
+  Epoch 5: Loss=28.9766, MAE=23.97, RMSE=32.04, R²=0.07, Time=0.8s
+  Epoch 6: Loss=27.9943, MAE=24.43, RMSE=31.81, R²=0.08, Time=0.8s
+  Epoch 7: Loss=27.2160, MAE=25.24, RMSE=33.71, R²=-0.03, Time=0.8s

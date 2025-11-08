@@ -1,0 +1,39 @@
+Component 1 Training with Real Essay Data
+==================================================
+
+Portuguese Specifications Applied:
+- Total de camadas: 3
+- Unidades/Célula: 10/26/21 (approximated with final size 21)
+- Otimizador: Adam (AdamW)
+- Learning Rate: 1.01e-3
+- Dropout rate: 0.164
+- Weight Decay (L2): 4.67e-6
+
+Real Data Statistics:
+- Total essays: 6568
+- Training set: 4926
+- Validation set: 656
+- Test set: 986
+- Essay vector dimension: 768
+- C1 score range: 0-200
+
+Model Configuration:
+{'hidden_sizes': [10, 26, 21], 'input_dim': 32, 'num_layers': 3, 'dropout': 0.164, 'aggregation': 'attn', 'mlp_hidden': 128, 'use_layer_norm': True, 'token_proj_dim': 128, 'output_range': (0, 200)}
+
+Training Configuration:
+{'epochs': 50, 'batch_size': 32, 'lr': 0.00101, 'weight_decay': 4.67e-06, 'optimizer': 'adamw', 'scheduler': 'none', 'plateau_patience': 2, 'plateau_factor': 0.5, 'onecycle_pct_start': 0.1, 'grad_clip_norm': 1.0, 'early_stopping_patience': 3, 'seed': 42, 'device': 'auto', 'use_amp': True, 'amp_dtype': torch.bfloat16, 'target_scaler': 'standard'}
+
+Best Validation Metrics:
+{'loss': 1008.216064453125, 'mae': 21.709604263305664, 'rmse': 31.752418518066406, 'r2': 0.09523206949234009, 'kappa': 0.18817970449261234, 'qwk': 0.25935271969879026, 'pearson_corr': 0.3316130042076111, 'step_accuracy': 0.5487804878048781, 'mae_step': 20.609756097560975, 'count': 656}
+
+Training History (last 10 epochs):
+  Epoch 3: Train Loss=24.801157, Val MAE=22.90, Val RMSE=31.77, Val Kappa=0.18, Val QWK=0.24, Val R²=0.09, Val Pearson=0.31, Val Step Acc=0.547, Time=2.1s
+  Epoch 4: Train Loss=24.315164, Val MAE=22.56, Val RMSE=31.64, Val Kappa=0.20, Val QWK=0.25, Val R²=0.10, Val Pearson=0.33, Val Step Acc=0.552, Time=1.9s
+  Epoch 5: Train Loss=23.928542, Val MAE=23.07, Val RMSE=32.51, Val Kappa=0.17, Val QWK=0.23, Val R²=0.05, Val Pearson=0.34, Val Step Acc=0.508, Time=1.9s
+  Epoch 6: Train Loss=23.826431, Val MAE=21.97, Val RMSE=31.60, Val Kappa=0.18, Val QWK=0.25, Val R²=0.10, Val Pearson=0.33, Val Step Acc=0.547, Time=1.9s
+  Epoch 7: Train Loss=23.550244, Val MAE=22.61, Val RMSE=32.11, Val Kappa=0.10, Val QWK=0.13, Val R²=0.07, Val Pearson=0.31, Val Step Acc=0.523, Time=2.1s
+  Epoch 8: Train Loss=23.557755, Val MAE=22.11, Val RMSE=31.59, Val Kappa=0.20, Val QWK=0.25, Val R²=0.10, Val Pearson=0.33, Val Step Acc=0.547, Time=2.2s
+  Epoch 9: Train Loss=23.509643, Val MAE=21.71, Val RMSE=31.75, Val Kappa=0.19, Val QWK=0.26, Val R²=0.10, Val Pearson=0.33, Val Step Acc=0.549, Time=2.2s
+  Epoch 10: Train Loss=23.516443, Val MAE=22.09, Val RMSE=31.62, Val Kappa=0.18, Val QWK=0.24, Val R²=0.10, Val Pearson=0.32, Val Step Acc=0.540, Time=2.2s
+  Epoch 11: Train Loss=23.392814, Val MAE=21.89, Val RMSE=31.91, Val Kappa=0.16, Val QWK=0.22, Val R²=0.09, Val Pearson=0.31, Val Step Acc=0.546, Time=2.1s
+  Epoch 12: Train Loss=23.446305, Val MAE=22.11, Val RMSE=31.70, Val Kappa=0.18, Val QWK=0.24, Val R²=0.10, Val Pearson=0.33, Val Step Acc=0.544, Time=1.9s

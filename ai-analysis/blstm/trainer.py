@@ -104,6 +104,7 @@ class BiLSTMTrainer:
         self.best_val_mae = float("inf")
         self.patience_counter = 0
         self.training_history: list[dict[str, float]] = []
+        self.best_val_predictions: list[dict[str, str | float | int]] = []
 
         # Ensure output directory exists
         ensure_dir(self.serialization_config.output_dir)
@@ -252,8 +253,8 @@ class BiLSTMTrainer:
 
         return total_loss / total_samples
 
-    def _validate_epoch(self) -> tuple[float, dict[str, float]]:
-        """Validate for one epoch and return average loss and metrics."""
+    def _validate_epoch(self) -> tuple[float, dict[str, float], list[dict[str, str | float | int]]]:
+        """Validate for one epoch and return average loss, metrics, and predictions."""
         self.model.eval()
         metrics = MetricsAccumulator()
         total_loss = 0.0
@@ -304,11 +305,12 @@ class BiLSTMTrainer:
                 # Update metrics (predictions are already clamped and on original scale)
                 metrics.update(predictions.cpu(), targets, ids)
 
-        # Compute metrics
+        # Compute metrics and per-sample predictions
         computed_metrics = metrics.compute_metrics(self.target_scaler)
+        predictions = metrics.get_predictions_df(self.target_scaler)
         avg_loss = total_loss / total_samples
 
-        return avg_loss, computed_metrics
+        return avg_loss, computed_metrics, predictions
 
     def _save_checkpoint(
         self, is_best: bool = False, metrics: dict[str, float] | None = None
@@ -360,7 +362,7 @@ class BiLSTMTrainer:
                 train_loss = self._train_epoch()
 
                 # Validation phase
-                val_loss, val_metrics = self._validate_epoch()
+                val_loss, val_metrics, val_predictions = self._validate_epoch()
 
                 # Update scheduler (except OneCycleLR which updates per step)
                 if isinstance(self.scheduler, ReduceLROnPlateau):
@@ -374,6 +376,7 @@ class BiLSTMTrainer:
                     self.best_val_mae = val_mae
                     self.patience_counter = 0
                     best_metrics = val_metrics.copy()
+                    self.best_val_predictions = val_predictions
                 else:
                     self.patience_counter += 1
 

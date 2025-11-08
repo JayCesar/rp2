@@ -89,9 +89,10 @@ class ModelConfig:
     num_layers: int = 3
     # bidirectional: bool = True
     dropout: float = 1.64e-01
-    aggregation: Literal["last", "mean", "max", "attn"] = "last"
+    aggregation: Literal["last", "mean", "max", "attn"] = "attn"
     mlp_hidden: int | None = None
     use_layer_norm: bool = False
+    token_proj_dim: int | None = None  # Optional token projection before LSTMs
     output_range: tuple[int, int] = (ScoreConstants.MIN, ScoreConstants.MAX)
 
     def to_dict(self) -> dict[str, int | float | bool | str | tuple[int, int]]:
@@ -425,7 +426,7 @@ def collate_batch(
 
 def split_dataset(
     dataset: EssayDataset,
-    val_ratio: float = 0.1,
+    val_ratio: float = 0.15,
     test_ratio: float = 0.15,
     seed: int = 42,
 ) -> tuple[Subset, Subset, Subset]:
@@ -482,12 +483,25 @@ class BiLSTMRegressor(nn.Module):
         super().__init__()
         self.config = config
 
+        # Optional token projection to reduce 768-dim input noise and size
+        if self.config.token_proj_dim and self.config.token_proj_dim > 0:
+            self.token_proj = nn.Sequential(
+                nn.LayerNorm(self.config.input_dim),
+                nn.Linear(self.config.input_dim, self.config.token_proj_dim),
+                nn.GELU(),
+                nn.Dropout(self.config.dropout),
+            )
+            lstm_input_dim = self.config.token_proj_dim
+        else:
+            self.token_proj = nn.Identity()
+            lstm_input_dim = self.config.input_dim
+
         # LSTM layers with per-layer hidden sizes
         hs1, hs2, hs3 = self.config.hidden_sizes[:3]
         direction_multiplier = 2  # bidirectional
 
         self.lstm1 = nn.LSTM(
-            input_size=self.config.input_dim,
+            input_size=lstm_input_dim,
             hidden_size=hs1,
             num_layers=1,
             batch_first=True,
@@ -519,12 +533,30 @@ class BiLSTMRegressor(nn.Module):
         else:
             self.aggregation = None
 
-        # Output head: simple linear layer (no MLP needed for sequential processing)
-        self.head = nn.Linear(lstm_output_size, 1)
+        # Pre-head normalization (optional)
+        self.pre_head_norm = (
+            nn.LayerNorm(lstm_output_size)
+            if self.config.use_layer_norm
+            else nn.Identity()
+        )
+
+        # Output head: optional MLP for better mapping/calibration
+        if self.config.mlp_hidden:
+            self.head = nn.Sequential(
+                nn.Linear(lstm_output_size, self.config.mlp_hidden),
+                nn.GELU(),
+                nn.Dropout(self.config.dropout),
+                nn.Linear(self.config.mlp_hidden, 1),
+            )
+        else:
+            self.head = nn.Linear(lstm_output_size, 1)
 
     def forward(self, tokens: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
         """Forward pass through the model."""
         batch_size = tokens.shape[0]
+
+        # Optional token projection prior to LSTM
+        tokens = self.token_proj(tokens)
 
         # Pack sequences for LSTM efficiency
         packed = pack_padded_sequence(
@@ -559,30 +591,33 @@ class BiLSTMRegressor(nn.Module):
             # Use last hidden states from both directions (always bidirectional)
             representation = torch.cat([hidden[-2], hidden[-1]], dim=1)
 
-        # elif self.config.aggregation == "mean":
-        #     # Mean pooling over valid tokens
-        #     mask = torch.arange(lstm_output.shape[1], device=tokens.device).unsqueeze(
-        #         0
-        #     ).expand(batch_size, -1) < lengths.unsqueeze(1)
-        #     masked_output = lstm_output * mask.unsqueeze(-1)
-        #     representation = masked_output.sum(dim=1) / lengths.unsqueeze(-1).float()
-        #
-        # elif self.config.aggregation == "max":
-        #     # Max pooling over valid tokens
-        #     mask = torch.arange(lstm_output.shape[1], device=tokens.device).unsqueeze(
-        #         0
-        #     ).expand(batch_size, -1) < lengths.unsqueeze(1)
-        #     masked_output = lstm_output.masked_fill(~mask.unsqueeze(-1), float("-inf"))
-        #     representation = masked_output.max(dim=1)[0]
-        #
-        # elif self.config.aggregation == "attn":
-        #     # Attention-based aggregation
-        #     representation = self.aggregation(lstm_output, lengths)
+        elif self.config.aggregation == "mean":
+            # Mean pooling over valid tokens
+            mask = torch.arange(lstm_output.shape[1], device=tokens.device).unsqueeze(
+                0
+            ).expand(batch_size, -1) < lengths.unsqueeze(1)
+            masked_output = lstm_output * mask.unsqueeze(-1)
+            representation = masked_output.sum(dim=1) / lengths.unsqueeze(-1).float()
+
+        elif self.config.aggregation == "max":
+            # Max pooling over valid tokens
+            mask = torch.arange(lstm_output.shape[1], device=tokens.device).unsqueeze(
+                0
+            ).expand(batch_size, -1) < lengths.unsqueeze(1)
+            masked_output = lstm_output.masked_fill(~mask.unsqueeze(-1), float("-inf"))
+            representation = masked_output.max(dim=1)[0]
+
+        elif self.config.aggregation == "attn":
+            # Attention-based aggregation
+            representation = self.aggregation(lstm_output, lengths)
 
         else:
             raise ValueError(f"Unknown aggregation method: {self.config.aggregation}")
 
-        # Apply MLP head
+        # Optional pre-head normalization
+        representation = self.pre_head_norm(representation)
+
+        # Apply regression head
         predictions = self.head(representation).squeeze(-1)  # [batch_size]
 
         return predictions
@@ -623,7 +658,7 @@ class MetricsAccumulator:
         self, preds: torch.Tensor, targets: torch.Tensor, ids: list[str]
     ) -> None:
         """Update with batch predictions and targets."""
-        self.predictions.extend(preds.detach().cpu().numpy())
+        self.predictions.extend(preds.detach().cpu().float().numpy())
         self.targets.extend(targets.detach().cpu().numpy())
         self.ids.extend(ids)
 

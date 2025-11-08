@@ -49,12 +49,20 @@ def main():
     set_seed(42)
     logger.info(f"Using device: {device}")
     
-    # Enable performance optimizations for CUDA
+    # Enable performance optimizations
     if device.type == "cuda":
+        # Enable TF32 for faster matmul on Ampere+ GPUs (new API)
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
+        # Enable cuDNN autotuner for optimal convolution algorithms
         torch.backends.cudnn.benchmark = True
-        logger.info("Enabled CUDA performance optimizations")
+        # Enable cuDNN for better performance
+        torch.backends.cudnn.enabled = True
+        logger.info("Enabled CUDA performance optimizations (TF32, cuDNN benchmark)")
+    
+    # Set optimal number of threads for CPU operations
+    if device.type == "cpu":
+        torch.set_num_threads(torch.get_num_threads())
     
     # Load dataset using pathlib - try different formats
     data_dir = project_root / "generated_datasets"
@@ -114,8 +122,9 @@ def main():
     val_dataset = EssayDataset(val_df)
     test_dataset = EssayDataset(test_df)
     
-    # Create data loaders
-    num_workers = 4 if device.type == "cuda" else 2
+    # Create data loaders with performance settings
+    # Increase workers for CUDA, enable prefetching
+    num_workers = 6 if device.type == "cuda" else 2
     
     train_loader = create_data_loader(
         train_dataset, batch_size=32, shuffle=True,
@@ -161,6 +170,8 @@ def main():
     
     # Create and train model
     model = Conv1DRegressor(model_config)
+    # Note: torch.compile disabled - requires Triton (not supported on Windows)
+    
     trainer = Trainer(
         model=model,
         train_loader=train_loader,
@@ -180,7 +191,8 @@ def main():
     model.eval()
     test_metrics = MetricsAccumulator()
     
-    with torch.no_grad():
+    # Use inference_mode for better performance than no_grad
+    with torch.inference_mode():
         for batch in test_loader:
             tokens = batch["tokens"].to(device, non_blocking=True)
             lengths = batch["lengths"].to(device, non_blocking=True) if batch["lengths"] is not None else None
@@ -194,7 +206,7 @@ def main():
                 predictions = model(tokens, lengths)
             
             predictions = torch.clamp(predictions, 0, 200)
-            test_metrics.update(predictions.cpu(), targets, ids)
+            test_metrics.update(predictions.cpu().float(), targets, ids)
     
     test_computed = test_metrics.compute_metrics(target_scaler)
     

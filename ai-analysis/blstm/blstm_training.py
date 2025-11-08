@@ -134,11 +134,12 @@ class EssayDataset(Dataset):
 
         if self.is_token_mode:
             # essay_token_embeddings -> tensor [seq_len, 768]
-            token_embeddings = np.array(row["essay_token_embeddings"])
+            token_embeddings = np.array(row["essay_token_embeddings"]) 
             tokens = torch.tensor(token_embeddings, dtype=torch.float32)
-            # Calculate actual sequence length (non-padded tokens)
-            # This is a simplified approach - you might want to use attention masks
-            seq_length = len(token_embeddings)  # For now, use full length
+            # Prefer true token length if available; fallback to full length
+            seq_length = int(row.get("essay_token_length", len(token_embeddings)))
+            # Clamp to array length bounds
+            seq_length = max(1, min(seq_length, len(token_embeddings)))
             lengths = torch.tensor(seq_length, dtype=torch.long)
         elif self.is_vector_mode:
             # essay_vector -> tensor [1, 768] - backward compatibility
@@ -338,13 +339,19 @@ def create_component1_config(
         return ModelConfig(
             hidden_sizes=[10, 26, 21],
             input_dim=768,
-            # No MLP head needed - BiLSTM now processes full sequences
+            aggregation="attn",
+            token_proj_dim=256,
+            mlp_hidden=128,
+            use_layer_norm=True,
         )
     if type == "features":
         return ModelConfig(
             hidden_sizes=[10, 26, 21],
             input_dim=30,
-            # No MLP head needed for feature input either
+            aggregation="attn",
+            token_proj_dim=128,
+            mlp_hidden=128,
+            use_layer_norm=True,
         )
 
 
@@ -505,6 +512,24 @@ def train_component1_standard(
     best_metrics = trainer.train()
     logger.info(f"Best metrics: {best_metrics}")
 
+    # Save per-sample validation predictions for best epoch
+    try:
+        if getattr(trainer, "best_val_predictions", None):
+            preds_df = pl.DataFrame(trainer.best_val_predictions)
+            preds_dir = Path(output_dir)
+            preds_dir.mkdir(parents=True, exist_ok=True)
+            preds_csv = preds_dir / "validation_predictions_best.csv"
+            preds_parquet = preds_dir / "validation_predictions_best.parquet"
+            preds_df.write_csv(preds_csv)
+            preds_df.write_parquet(preds_parquet)
+            logger.info(
+                f"Saved best validation predictions to: {preds_csv} and {preds_parquet}"
+            )
+        else:
+            logger.warning("No best validation predictions captured to save.")
+    except Exception as e:
+        logger.warning(f"Failed to save best validation predictions: {e}")
+
     # Save checkpoint path
     checkpoint_path = Path(output_dir) / "best.pt"
 
@@ -653,17 +678,32 @@ def train_on_vectorized_essays(device: torch.device) -> None:
 
     # Load dataset with optional sample limit for testing
     max_samples = None  # Set to None to use all samples
-    relevant_columns = "c1", "essay_token_embeddings"  # Updated column name
+    # Try to include true lengths if present; fallback gracefully
     DEFAULT_MAX_SAMPLE_SIZE = 2**31 - 1
-    dataset = (
-        pl.scan_parquet(data_file)
-        .select(relevant_columns)
-        .head(max_samples if max_samples is not None else DEFAULT_MAX_SAMPLE_SIZE)
-        .drop_nulls()
-        .unique()
-        .collect()
+    try:
+        relevant_columns = "c1", "essay_token_embeddings", "essay_token_length"
+        dataset = (
+            pl.scan_parquet(data_file)
+            .select(relevant_columns)
+            .head(max_samples if max_samples is not None else DEFAULT_MAX_SAMPLE_SIZE)
+            .drop_nulls()
+            .unique()
+            .collect()
+        )
+    except Exception:
+        relevant_columns = "c1", "essay_token_embeddings"
+        dataset = (
+            pl.scan_parquet(data_file)
+            .select(relevant_columns)
+            .head(max_samples if max_samples is not None else DEFAULT_MAX_SAMPLE_SIZE)
+            .drop_nulls()
+            .unique()
+            .collect()
+        )
+    logger.info(f"Loaded dataset with {len(dataset)} essays: {dataset}")
+    logger.info(
+        f"Essay token embeddings shape: {dataset.schema['essay_token_embeddings']}"
     )
-    logger.info(f"Loaded dataset with {len(dataset)} essays: {dataset.head(10)}")
 
     dataset = EssayDataset(dataset, feature_cols=[])
 
@@ -726,7 +766,7 @@ def train_on_features(device: torch.device) -> None:
         .unique()
         .collect()
     )
-    logger.info(f"Loaded dataset with {len(dataset)} essays: {dataset.head(10)}")
+    logger.info(f"Loaded dataset with {len(dataset)} essays: {dataset}")
 
     dataset = EssayDataset(dataset, feature_cols=[])
 
@@ -764,11 +804,6 @@ def main():
     device = get_device("auto")
     set_seed(42)
     logger.info(f"Using device: {device}")
-
-    # Initialize model_save_path to ensure it's always defined
-    model_save_path_features = (
-        Path(__file__).parent / "runs" / "features" / "blstm_model"
-    )
 
     try:
         train_on_vectorized_essays(device)

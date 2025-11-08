@@ -90,7 +90,7 @@ class Trainer:
         
         # Setup mixed precision
         self.use_amp = train_config.use_amp and self.device.type == "cuda"
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
         
         # Setup loss function
         self.criterion = nn.L1Loss()  # MAE loss
@@ -253,7 +253,7 @@ class Trainer:
                 total_loss += loss.item() * batch_size
                 
                 # Update metrics (on original scale)
-                metrics.update(predictions_clamped.cpu(), targets, ids)
+                metrics.update(predictions_clamped.cpu().float(), targets, ids)
         
         # Compute metrics
         computed_metrics = metrics.compute_metrics(self.target_scaler)

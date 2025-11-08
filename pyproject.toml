@@ -12,7 +12,24 @@ dependencies = [
 	"scikit-learn>=1.7.1",
 	"spacy[lookups,transformers]>=3.8.7",
 	"torch",
-	"torchaudio",
 	"torchvision",
+	"torchaudio",
 	"transformers[torch]>=4.49.0",
+	"markupsafe",
 ]
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple/"
+default = true
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu128"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cuda" }
+torchvision = { index = "pytorch-cuda" }
+torchaudio = { index = "pytorch-cuda" }
+markupsafe = { index = "pypi" }
+

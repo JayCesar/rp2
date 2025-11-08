@@ -11,12 +11,17 @@ logger = utils.logger
 
 # Configuration
 MODEL_NAME = "neuralmind/bert-base-portuguese-cased"  # BERTimbau
-MAX_LENGTH = 512  # BERT maximum sequence length
+MAX_LENGTH = 128  # Use 128 tokens to match BLSTM preprocessed dataset
 MAX_SAMPLES = None  # Set to None to use all samples
+
+# Initialize device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+logger.info(f"Using device: {device}")
 
 # Initialize model
 logger.info(f"Loading model from {MODEL_NAME}")
 model = transformers.AutoModel.from_pretrained(MODEL_NAME)
+model = model.to(device)
 logger.info("model loaded")
 
 # Initialize tokenizer
@@ -47,14 +52,17 @@ def vectorize_essay(essay, idx):
         return_tensors="pt",
     )
 
+    # Move inputs to device
+    tokenized_inputs = {k: v.to(device) for k, v in tokenized_inputs.items()}
+
     with torch.no_grad():
         # Get BERT embeddings for all tokens
         bert_outputs = model(**tokenized_inputs)
         # Use all token embeddings from last hidden state
-        # Shape: [1, MAX_LENGTH, 768] = [1, 512, 768]
+        # Shape: [1, MAX_LENGTH, 768] = [1, 128, 768]
         all_token_embeddings = bert_outputs.last_hidden_state
 
-        # Remove batch dimension and return as numpy array: [512, 768]
+        # Remove batch dimension and return as numpy array: [128, 768]
         token_embeddings = all_token_embeddings.squeeze(0).cpu().numpy()
 
     return token_embeddings
@@ -79,21 +87,50 @@ def load_and_preprocess_dataset(csv_path) -> pl.DataFrame:
     logger.info(f"Dataset loaded from {csv_path}\n")
 
     logger.info("Vectorizing dataset's essays...")
-    dataset = dataset.with_columns(
-        pl.col("essay_as_single_utf8_string")
-        .map_batches(
-            lambda essays: pl.Series(
-                name="essay_token_embeddings",
-                values=(
-                    vectorize_essay(essay, idx).tolist()
-                    for idx, essay in enumerate(essays)
+    # Build both columns lazily and collect once
+    dataset = (
+        dataset.with_columns(
+            pl.col("essay_as_single_utf8_string")
+            .map_batches(
+                lambda essays: pl.Series(
+                    values=(
+                        vectorize_essay(essay, idx).tolist()
+                        for idx, essay in enumerate(essays)
+                    ),
+                    dtype=pl.Array(pl.Array(pl.Float32, 768), MAX_LENGTH),
                 ),
-                dtype=pl.Array(pl.Array(pl.Float32, 768), MAX_LENGTH),
-            ),
-            return_dtype=pl.Array(pl.Array(pl.Float32, 768), MAX_LENGTH),  # [512, 768]
+                return_dtype=pl.Array(
+                    pl.Array(pl.Float32, 768), MAX_LENGTH
+                ),  # [128, 768]
+            )
+            .alias("essay_token_embeddings")  # token-level embeddings
         )
-        .alias("essay_token_embeddings")  # Renamed to reflect token-level embeddings
-    ).collect()
+        .with_columns(
+            pl.col("essay_as_single_utf8_string")
+            .map_batches(
+                lambda essays: pl.Series(
+                    values=(
+                        int(
+                            tokenizer(
+                                essay,
+                                truncation=True,
+                                max_length=MAX_LENGTH,
+                                padding="max_length",
+                                return_tensors="pt",
+                            )["attention_mask"]
+                            .sum()
+                            .item()
+                        )
+                        for idx, essay in enumerate(essays)
+                    ),
+                    dtype=pl.Int32,
+                ),
+                return_dtype=pl.Int32,
+            )
+            .alias("essay_token_length")
+        )
+        .collect()
+    )
     logger.info(f"Dataset with {len(dataset)} samples:\n{dataset}")
 
     return dataset
