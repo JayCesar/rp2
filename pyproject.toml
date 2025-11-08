@@ -33,3 +33,8 @@ torchvision = { index = "pytorch-cuda" }
 torchaudio = { index = "pytorch-cuda" }
 markupsafe = { index = "pypi" }
 
+[dependency-groups]
+dev = [
+    "pytest>=9.0.0",
+]
+

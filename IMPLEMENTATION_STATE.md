@@ -39,11 +39,29 @@
 - **Updated**: NOTES.md with detailed code audit
 - **Commit**: Pending - `chore(blstm): add code map for CE work`
 
+#### ✅ Step 3: Add Class Mapping Utilities
+- **Status**: Complete
+- **Files Created**:
+  - `ai-analysis/blstm/blstm_ce.py` - Mapping utilities and constants
+  - `tests/test_ce_mapping.py` - 23 unit tests (all passing)
+- **Functions Implemented**:
+  - Scalar: `score_to_class_idx()`, `class_idx_to_score()`
+  - Vectorized: `scores_to_class_indices()`, `class_indices_to_scores()`
+  - Inference: `logits_to_scores()` (argmax → class → score)
+  - Validation: `validate_scores_for_ce()`
+- **Test Coverage**:
+  - All roundtrip conversions (score→class→score, class→score→class)
+  - Invalid input validation (OOD scores/indices raise ValueError)
+  - Multidimensional tensor support
+  - CUDA/CPU consistency (if CUDA available)
+- **Test Results**: ✅ 23/23 passed in 3.14s
+- **Commit**: Pending - `feat(blstm): add CE class↔score mappings + tests`
+
 ### In Progress
 
-#### 🔵 Step 3: Add Class Mapping Utilities
+#### 🔵 Step 4: Implement BiLSTMClassifier
 - **Status**: Starting next
-- **Goal**: Implement score ↔ class index mapping with vectorized support
+- **Goal**: Classification head variant mirroring BiLSTMRegressor encoder
 
 ---
 
@@ -69,6 +87,8 @@
 ```
 NOTES.md                           # Design decisions and code map
 IMPLEMENTATION_STATE.md            # This file - progress tracking
+ai-analysis/blstm/blstm_ce.py      # CE mapping utilities (6 functions + constants)
+tests/test_ce_mapping.py           # Unit tests for mappings (23 tests, all passing)
 ```
 
 ---
