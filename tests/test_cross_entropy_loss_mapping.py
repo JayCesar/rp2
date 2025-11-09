@@ -8,7 +8,7 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "ai-analysis" / "blstm"))
 
-from blstm_ce import (
+from blstm_cross_entropy_loss import (
     score_to_class_idx,
     class_idx_to_score,
     scores_to_class_indices,

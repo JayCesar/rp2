@@ -211,3 +211,164 @@ def validate_scores_for_ce(scores: Union[torch.Tensor, list, tuple]) -> None:
             f"All scores must be in {sorted(VALID_SCORES)}. "
             f"Check your dataset and ensure scores are properly rounded/snapped."
         )
+
+
+# BiLSTMClassifier - Classification head variant
+class BiLSTMClassifier(nn.Module):
+    """Bidirectional LSTM for essay C1 score classification with CrossEntropyLoss.
+    
+    Mirrors BiLSTMRegressor encoder but replaces regression head with
+    6-way classification head for {0, 40, 80, 120, 160, 200}.
+    
+    Forward returns raw logits [batch_size, 6] for CE loss.
+    Use logits_to_scores() to convert predictions to C1 scores.
+    """
+    
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        
+        # Import common attention aggregation
+        import sys
+        from pathlib import Path
+        sys.path.append(str(Path(__file__).parent.parent))
+        from common import AttentionAggregation
+        
+        # Token projection
+        if self.config.token_proj_dim and self.config.token_proj_dim > 0:
+            self.token_proj = nn.Sequential(
+                nn.LayerNorm(self.config.input_dim),
+                nn.Linear(self.config.input_dim, self.config.token_proj_dim),
+                nn.GELU(),
+                nn.Dropout(self.config.dropout),
+            )
+            lstm_input_dim = self.config.token_proj_dim
+        else:
+            self.token_proj = nn.Identity()
+            lstm_input_dim = self.config.input_dim
+        
+        # LSTM layers
+        hs1, hs2, hs3 = self.config.hidden_sizes[:3]
+        direction_multiplier = 2
+        
+        self.lstm1 = nn.LSTM(
+            input_size=lstm_input_dim,
+            hidden_size=hs1,
+            num_layers=1,
+            batch_first=True,
+            bidirectional=True,
+        )
+        self.lstm2 = nn.LSTM(
+            input_size=hs1 * direction_multiplier,
+            hidden_size=hs2,
+            num_layers=1,
+            batch_first=True,
+            bidirectional=True,
+        )
+        self.lstm3 = nn.LSTM(
+            input_size=hs2 * direction_multiplier,
+            hidden_size=hs3,
+            num_layers=1,
+            batch_first=True,
+            bidirectional=True,
+        )
+        
+        self.dropout = nn.Dropout(self.config.dropout)
+        lstm_output_size = hs3 * direction_multiplier
+        
+        # Aggregation
+        if config.aggregation == "attn":
+            self.aggregation = AttentionAggregation(lstm_output_size)
+        else:
+            self.aggregation = None
+        
+        # Pre-head norm
+        self.pre_head_norm = (
+            nn.LayerNorm(lstm_output_size)
+            if self.config.use_layer_norm
+            else nn.Identity()
+        )
+        
+        # Classification head (6 classes)
+        if self.config.mlp_hidden:
+            self.head = nn.Sequential(
+                nn.Linear(lstm_output_size, self.config.mlp_hidden),
+                nn.GELU(),
+                nn.Dropout(self.config.dropout),
+                nn.Linear(self.config.mlp_hidden, NUM_CLASSES),
+            )
+        else:
+            self.head = nn.Linear(lstm_output_size, NUM_CLASSES)
+    
+    def forward(self, tokens: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
+        """Forward pass.
+        
+        Args:
+            tokens: [batch_size, max_seq_len, input_dim]
+            lengths: [batch_size]
+            
+        Returns:
+            logits: [batch_size, 6] raw logits for CrossEntropyLoss
+        """
+        from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
+        
+        batch_size = tokens.shape[0]
+        tokens = self.token_proj(tokens)
+        
+        # Pack and process through LSTM layers
+        packed = pack_padded_sequence(
+            tokens, lengths.cpu(), batch_first=True, enforce_sorted=False
+        )
+        
+        packed_out1, _ = self.lstm1(packed)
+        packed_out1 = torch.nn.utils.rnn.PackedSequence(
+            self.dropout(packed_out1.data),
+            packed_out1.batch_sizes,
+            packed_out1.sorted_indices,
+            packed_out1.unsorted_indices,
+        )
+        
+        packed_out2, _ = self.lstm2(packed_out1)
+        packed_out2 = torch.nn.utils.rnn.PackedSequence(
+            self.dropout(packed_out2.data),
+            packed_out2.batch_sizes,
+            packed_out2.sorted_indices,
+            packed_out2.unsorted_indices,
+        )
+        
+        packed_out3, (hidden3, cell3) = self.lstm3(packed_out2)
+        lstm_output, _ = pad_packed_sequence(packed_out3, batch_first=True)
+        hidden, cell = hidden3, cell3
+        
+        # Aggregate
+        if self.config.aggregation == "last":
+            representation = torch.cat([hidden[-2], hidden[-1]], dim=1)
+        elif self.config.aggregation == "mean":
+            mask = torch.arange(lstm_output.shape[1], device=tokens.device).unsqueeze(
+                0
+            ).expand(batch_size, -1) < lengths.unsqueeze(1)
+            masked_output = lstm_output * mask.unsqueeze(-1)
+            representation = masked_output.sum(dim=1) / lengths.unsqueeze(-1).float()
+        elif self.config.aggregation == "max":
+            mask = torch.arange(lstm_output.shape[1], device=tokens.device).unsqueeze(
+                0
+            ).expand(batch_size, -1) < lengths.unsqueeze(1)
+            masked_output = lstm_output.masked_fill(~mask.unsqueeze(-1), float("-inf"))
+            representation = masked_output.max(dim=1)[0]
+        elif self.config.aggregation == "attn":
+            representation = self.aggregation(lstm_output, lengths)
+        else:
+            raise ValueError(f"Unknown aggregation: {self.config.aggregation}")
+        
+        representation = self.pre_head_norm(representation)
+        logits = self.head(representation)
+        return logits
+    
+    def predict_scores(self, tokens: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
+        """Forward + convert logits to scores.
+        
+        Returns:
+            Predicted C1 scores [batch_size] in {0, 40, 80, 120, 160, 200}
+        """
+        logits = self.forward(tokens, lengths)
+        return logits_to_scores(logits)
