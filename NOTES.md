@@ -128,16 +128,35 @@ Score-to-class mapping for C1 essay scores:
 6. **Best Tracking**: Use `best_val_mae` (or same metric as regression) for checkpoint selection
 7. **Dataset Shape**: EssayDataset returns dict with "id", "embedding" (or features), "score"
 
-### New CE System (To Be Created)
-- `ai-analysis/blstm/blstm_ce.py` - BiLSTMClassifier + mapping utilities
-- `ai-analysis/blstm/blstm_training_ce.py` - CE training core
-- `ai-analysis/blstm/trainer_ce.py` - BiLSTMCETrainer class
-- `ai-analysis/blstm/blstm_train_on_features_ce.py` - Features CE script
-- `ai-analysis/blstm/blstm_train_on_vectorized_essays_ce.py` - Vectorized essays CE script
-- `tests/test_ce_mapping.py` - Mapping utilities tests
-- `tests/test_bilstm_classifier.py` - BiLSTMClassifier tests
-- `tests/test_training_ce.py` - Training core tests
-- `tests/test_scripts_smoke.py` - Smoke tests for CE scripts
+### New CE System (✅ Created)
+
+**Files Created**:
+- ✅ `ai-analysis/blstm/blstm_cross_entropy_loss.py` - BiLSTMClassifier + mapping utilities (374 lines)
+- ✅ `ai-analysis/blstm/trainer_cross_entropy_loss.py` - BiLSTMCETrainer class (491 lines)
+- ✅ `ai-analysis/blstm/blstm_train_on_features_cross_entropy_loss.py` - Features CE script (349 lines)
+- ✅ `ai-analysis/blstm/blstm_train_on_vectorized_essays_cross_entropy_loss.py` - Essays CE script (356 lines)
+- ✅ `tests/test_cross_entropy_loss_mapping.py` - Mapping tests (23 tests, all passing)
+- ✅ `tests/test_bilstm_cross_entropy_loss_classifier.py` - Classifier tests (19 tests, all passing)
+
+**Status**: ✅ **COMPLETE** - All components implemented and tested
+
+**Test Results**:
+- ✅ 23/23 mapping tests passed
+- ✅ 19/19 classifier tests passed
+- ✅ 2/2 integration smoke tests passed
+- ✅ Feature mode training verified (1 epoch on 500 samples)
+- ✅ Predictions confirmed to be valid scores from {0, 40, 80, 120, 160, 200}
+- ✅ Checkpoints include `loss_type: "CrossEntropyLoss"` metadata
+
+**Output Directories**:
+- Features CE: `runs/features_cross_entropy_loss/blstm_model/`
+- Essays CE: `runs/vectorized_essays_cross_entropy_loss/blstm_model/`
+
+**Key Implementation Details**:
+1. **Feature Mode Handling**: Trainer automatically reshapes [B, F] → [B, 1, F] with lengths=[1]*B
+2. **Metrics**: All computed in score space after logits→argmax→class→score conversion
+3. **Best Tracking**: Uses best_val_mae like regression system
+4. **Configs**: Full compatibility with existing ModelConfig/TrainConfig/SerializationConfig
 
 ---
 
