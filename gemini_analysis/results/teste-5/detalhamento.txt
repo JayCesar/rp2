@@ -1,0 +1,1 @@
+usamos o teste-3, que obteve melhor resultado, e refinamos/detalhamos um pouco mais, a fim de tornar o viés menos punitivo, buscando ter menos notas 80 e mais notas 160
