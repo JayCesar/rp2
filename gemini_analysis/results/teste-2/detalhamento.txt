@@ -1,1 +1,28 @@
 Remoção da análise da nota final, buscando que a análise focasse apenas na competência 1
+
+- Conclusão
+    - Em relação às notas 120, ficou muito próximo do real, mas ainda há um foco muito grande em notas 80 e quase nada em 160
+
+{
+    "RSME": "45.12",
+    "QWK": "0.2153"
+}
+
+{
+    "original_c1": {
+        "0": 107,
+        "40": 24,
+        "80": 524,
+        "120": 3145,
+        "160": 2483,
+        "200": 294
+    },
+    "gemini_c1": {
+        "0": 10,
+        "40": 163,
+        "80": 2435,
+        "120": 3587,
+        "160": 268,
+        "200": 114
+    }
+}

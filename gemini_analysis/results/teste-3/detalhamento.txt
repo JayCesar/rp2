@@ -1,1 +1,27 @@
 Detalhamento do que são os desvios a serem identificados, mais especificação do que cada nota representa
+
+- O detalhamento em si melhorou quase nada no QWK, e piorou o RMSE, mas é um avanço válido para se basear nos próximos testes
+
+{
+    "RSME": "48.72",
+    "QWK": "0.2190"
+}
+
+{
+    "original_c1": {
+        "0": 107,
+        "40": 24,
+        "80": 524,
+        "120": 3145,
+        "160": 2483,
+        "200": 294
+    },
+    "gemini_c1": {
+        "0": 10,
+        "40": 209,
+        "80": 3407,
+        "120": 2398,
+        "160": 476,
+        "200": 77
+    }
+}

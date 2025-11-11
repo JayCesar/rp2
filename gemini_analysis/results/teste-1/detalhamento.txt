@@ -1,1 +1,29 @@
 Primeira versão, ainda incluía nota c1 e nota final.
+
+- Conclusão: 
+    - A solicitação da nota final total pode ter influenciado na análise.
+    - Houve um viés muito punitivo, com um foco absoluto em notas 80, loge da realidade (que se distribui majoritariamente entre 120 e 160)
+
+{
+    "RSME": "61.06",
+    "QWK": "0.1441"
+}
+
+{
+    "original_c1": {
+        "0": 107,
+        "40": 24,
+        "80": 524,
+        "120": 3145,
+        "160": 2483,
+        "200": 294
+    },
+    "gemini_c1": {
+        "0": 16,
+        "40": 1136,
+        "80": 3759,
+        "120": 1404,
+        "160": 217,
+        "200": 45
+    }
+}

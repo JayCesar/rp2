@@ -1,1 +1,27 @@
 usamos o teste-3, que obteve melhor resultado, e refinamos/detalhamos um pouco mais, a fim de tornar o viés menos punitivo, buscando ter menos notas 80 e mais notas 160
+
+- Ainda houve um viés punitivo muito alto, para notas 80, e uma leve melhora para notas 160. Será adicionado um viés contra-punitivo
+
+{
+    "RSME": "46.18",
+    "QWK": "0.2557"
+}
+
+{
+    "original_c1": {
+        "0": 107,
+        "40": 24,
+        "80": 524,
+        "120": 3145,
+        "160": 2483,
+        "200": 294
+    },
+    "gemini_c1": {
+        "0": 10,
+        "40": 128,
+        "80": 3077,
+        "120": 2261,
+        "160": 990,
+        "200": 111
+    }
+}

@@ -1,2 +1,28 @@
 inversão de direção, tentativa com um prompt bem menor e direto
 remoção da justificativa
+
+- Como esperado, esse foi o pior resultado, feito para eliminar as suspeitas de que menos detalhamento e mais objetividade melhor
+
+{
+    "RSME": "72.38",
+    "QWK": "0.0951"
+}
+
+{
+    "original_c1": {
+        "0": 107,
+        "40": 24,
+        "80": 524,
+        "120": 3145,
+        "160": 2483,
+        "200": 294
+    },
+    "gemini_c1": {
+        "0": 73,
+        "40": 2331,
+        "80": 3115,
+        "120": 845,
+        "160": 174,
+        "200": 39
+    }
+}
