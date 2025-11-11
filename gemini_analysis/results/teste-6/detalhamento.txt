@@ -1,0 +1,27 @@
+repetindo o teste-5 (que já era um aprimoramento do teste-3), mas deixando claro que a distribuição de redações se concentra em 120 e 160, pedindo para que a avaliação seja mais generosa, esclarecendo ainda mais os intervalos 80, 120 e 160
+
+- Houve uma melhora significativa no RMSE, com o melhor resultado de QWK (ainda que longes do ideal). Como consequência da solicitação de ser mais generoso, houve um foco total em 120, que acabou desnivelando o resto das notas
+
+{
+    "RSME": "33.71",
+    "QWK": "0.2473"
+}
+
+{
+    "original_c1": {
+        "0": 107,
+        "40": 24,
+        "80": 524,
+        "120": 3145,
+        "160": 2483,
+        "200": 294
+    },
+    "gemini_c1": {
+        "0": 10,
+        "40": 2,
+        "80": 60,
+        "120": 4884,
+        "160": 1537,
+        "200": 84
+    }
+}
