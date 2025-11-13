@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""BiLSTM Training on Vectorized Essays with CrossEntropy Loss
+"""Conv1D Training on Features with CrossEntropy Loss
 
-Trains a BiLSTMClassifier on essay BERT embeddings using CrossEntropyLoss
+Trains a Conv1DClassifier on essay linguistic features using CrossEntropyLoss
 for 6-class C1 score classification {0, 40, 80, 120, 160, 200}.
 
-Mirrors blstm_train_on_vectorized_essays.py but uses classification approach:
-- BiLSTMClassifier with 6 logits output
+Mirrors blstm_train_on_features_cross_entropy_loss.py but uses Conv1D:
+- Conv1DClassifier with 6 logits output
 - CrossEntropyLoss on class indices
 - Predictions converted back to score space for metrics
-- Output directory: runs/vectorized_essays_cross_entropy_loss/
+- Output directory: runs/features_cross_entropy_loss/conv1d_model/
 
-Data Source: extended_essay-br_preprocessed_for_BLSTM.parquet
-Features: 768-dimensional BERT token embeddings
+Data Source: dataset_with_languagetool_metrics.parquet
+Features: SCREAMING_SNAKE_CASE linguistic feature columns
 Target: C1 scores (0-200)
 """
 
@@ -21,29 +21,29 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
+import polars.selectors as cs
 import torch
-from torch.utils.data import DataLoader
 
-# Import modules
+# Import Conv1D modules
 sys.path.append(".")
-from blstm import (
+from conv1d import (
     ModelConfig,
     SerializationConfig,
-    TargetScaler,
     TrainConfig,
-    get_device,
-    set_seed,
 )
 
 # Import CE-specific components
-from blstm_cross_entropy_loss import BiLSTMClassifier
-from trainer_cross_entropy_loss import BiLSTMCETrainer
+from conv1d_cross_entropy_loss import Conv1DClassifier, validate_scores_for_ce
+from trainer_cross_entropy_loss import Conv1DCETrainer
 
 # Import common modules
 sys.path.append(str(Path(__file__).parent.parent))
 from common import (
     EssayDataset,
+    TargetScaler,
     create_data_loader,
+    get_device,
+    set_seed,
     split_dataset,
 )
 
@@ -57,39 +57,35 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def create_component1_config_for_vectorized_essays() -> ModelConfig:
-    """Create ModelConfig for Component 1 vectorized essays with CE."""
+def create_component1_config_for_features() -> ModelConfig:
+    """Create ModelConfig for Component 1 features with CE."""
     return ModelConfig(
-        hidden_sizes=[10, 26, 21],
-        input_dim=768,
-        aggregation="attn",
-        token_proj_dim=256,
-        mlp_hidden=128,
-        use_layer_norm=True,
+        conv_filters=[28, 39],  # From CLaRiCe Table 4
+        kernel_sizes=[3, 3],
+        input_dim=30,  # Adjusted dynamically
+        dense_neurons=90,  # From CLaRiCe Table 4
+        dropout=0.303,  # From CLaRiCe Table 4
+        pooling="max",
     )
 
 
 def create_training_config() -> TrainConfig:
     """Create training configuration."""
-    return TrainConfig(
-        target_scaler="standard"  # Use standard scaler (z-normalization)
-    )
+    return TrainConfig()  # Uses defaults from conv1d.py
 
 
-def train_on_vectorized_essays_ce(device: torch.device) -> dict[str, float]:
-    """Train Component 1 using BiLSTMClassifier with CrossEntropyLoss on embeddings."""
-    logger.info("Training Component 1 with CE on Vectorized Essays")
+def train_on_features_ce(device: torch.device) -> dict[str, float]:
+    """Train Component 1 using Conv1DClassifier with CrossEntropyLoss on features."""
+    logger.info("Training Component 1 with CE on Features (Conv1D)")
 
-    # Load essay embedding data
+    # Load feature data
     parquet_file = (
         project_root
         / "generated_datasets"
-        / "extended_essay-br_preprocessed_for_BLSTM.parquet"
+        / "dataset_with_languagetool_metrics.parquet"
     )
     json_file = (
-        project_root
-        / "generated_datasets"
-        / "extended_essay-br_preprocessed_for_BLSTM.json"
+        project_root / "generated_datasets" / "dataset_with_languagetool_metrics.json"
     )
 
     data_file = None
@@ -103,46 +99,45 @@ def train_on_vectorized_essays_ce(device: torch.device) -> dict[str, float]:
         logger.error(f"Data file not found. Looked for: {parquet_file} and {json_file}")
         exit(1)
 
-    # Load dataset
+    # Load dataset - select SCREAMING_SNAKE_CASE feature columns plus target 'c1'
     max_samples = None
+    relevant_columns = [pl.col("c1"), cs.matches(r"^[A-Z0-9_]+$")]
     DEFAULT_MAX_SAMPLE_SIZE = 2**31 - 1
-    try:
-        relevant_columns = "c1", "essay_token_embeddings", "essay_token_length"
-        dataset = (
-            pl.scan_parquet(data_file)
-            .select(relevant_columns)
-            .head(max_samples if max_samples is not None else DEFAULT_MAX_SAMPLE_SIZE)
-            .drop_nulls()
-            .unique()
-            .collect()
-        )
-    except Exception:
-        relevant_columns = "c1", "essay_token_embeddings"
-        dataset = (
-            pl.scan_parquet(data_file)
-            .select(relevant_columns)
-            .head(max_samples if max_samples is not None else DEFAULT_MAX_SAMPLE_SIZE)
-            .drop_nulls()
-            .unique()
-            .collect()
-        )
-    logger.info(f"Loaded dataset with {len(dataset)} essays")
-    logger.info(
-        f"Essay token embeddings shape: {dataset.schema['essay_token_embeddings']}"
+    dataset = (
+        pl.scan_parquet(data_file)
+        .select(relevant_columns)
+        .head(max_samples if max_samples is not None else DEFAULT_MAX_SAMPLE_SIZE)
+        .drop_nulls()
+        .unique()
+        .collect()
     )
+    logger.info(f"Loaded dataset with {len(dataset)} essays")
 
     dataset = EssayDataset(dataset)
+
+    # Validate strict label set
+    all_scores = dataset.data["c1"].to_numpy()
+    validate_scores_for_ce(torch.tensor(all_scores))
+    logger.info("✓ All labels valid for CE training")
 
     # Split dataset
     train_dataset, val_dataset, test_dataset = split_dataset(dataset, seed=42)
 
     # Target scaler (not used for CE but keep for API parity)
-    all_scores = dataset.data["c1"].to_numpy()
     target_scaler = TargetScaler("none")
     target_scaler.fit(np.array(all_scores))
 
     # Create configurations
-    model_config = create_component1_config_for_vectorized_essays()
+    model_config = create_component1_config_for_features()
+
+    # Adjust input_dim dynamically to match selected feature columns
+    try:
+        model_config.input_dim = len(dataset.feature_cols)
+    except AttributeError:
+        # Fallback: infer from first row length (excluding target)
+        first_row = dataset.data.row(0, named=True)
+        model_config.input_dim = len([k for k in first_row.keys() if k != "c1"])
+
     train_config = create_training_config()
 
     logger.info(f"Model Config: {model_config.to_dict()}")
@@ -165,16 +160,16 @@ def train_on_vectorized_essays_ce(device: torch.device) -> dict[str, float]:
     )
 
     # Create model
-    model = BiLSTMClassifier(model_config)
+    model = Conv1DClassifier(model_config)
     logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
 
     # Setup training
-    output_dir = Path(__file__).parent / "runs" / "vectorized_essays_cross_entropy_loss" / "blstm_model"
+    output_dir = Path(__file__).parent / "runs" / "features_cross_entropy_loss" / "conv1d_model"
     serialization_config = SerializationConfig(
         output_dir=output_dir, save_best_only=True, keep_last_k=3
     )
 
-    trainer = BiLSTMCETrainer(
+    trainer = Conv1DCETrainer(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
@@ -230,26 +225,26 @@ def train_on_vectorized_essays_ce(device: torch.device) -> dict[str, float]:
         )
 
     # Save training summary
-    summary_path = Path(output_dir) / "component1_vectorized_essays_ce_summary.txt"
+    summary_path = Path(output_dir) / "component1_features_ce_summary.txt"
     with open(summary_path, "w") as f:
-        f.write("Component 1 Training on Vectorized Essays with CrossEntropyLoss\n")
+        f.write("Component 1 Training on Features with CrossEntropyLoss (Conv1D)\n")
         f.write("=" * 50 + "\n\n")
         f.write("Classification Specifications:\n")
         f.write("- Loss: CrossEntropyLoss\n")
         f.write("- Classes: 6 (0, 40, 80, 120, 160, 200)\n")
-        f.write("- Model: BiLSTMClassifier\n")
-        f.write("- Total de camadas: 3\n")
-        f.write("- Unidades/Célula: 10/26/21\n")
-        f.write("- Otimizador: AdamW\n")
-        f.write("- Learning Rate: 1.01e-3\n")
-        f.write("- Dropout rate: 0.164\n")
-        f.write("- Weight Decay (L2): 4.67e-6\n\n")
+        f.write("- Model: Conv1DClassifier\n")
+        f.write("- Conv filters: 28, 39\n")
+        f.write("- Dense neurons: 90\n")
+        f.write("- Optimizer: AdamW\n")
+        f.write("- Learning Rate: 7.06e-3\n")
+        f.write("- Dropout rate: 0.303\n")
+        f.write("- Weight Decay (L2): 6.61e-4\n\n")
         f.write("Data Statistics:\n")
         f.write(f"- Total essays: {len(dataset)}\n")
         f.write(f"- Training set: {len(train_dataset)}\n")
         f.write(f"- Validation set: {len(val_dataset)}\n")
         f.write(f"- Test set: {len(test_dataset)}\n")
-        f.write("- Essay vector dimension: 768\n")
+        f.write(f"- Feature dimension: {model_config.input_dim}\n")
         f.write("- C1 score range: 0-200\n\n")
         f.write(f"Model Configuration:\n{model_config.to_dict()}\n\n")
         f.write(f"Training Configuration:\n{train_config.to_dict()}\n\n")
@@ -280,7 +275,7 @@ def show_and_save_metrics(
     logger.info("CE Training completed successfully")
 
     # Final metrics display
-    print("\nFinal validation metrics (CrossEntropyLoss):")
+    print("\nFinal validation metrics (CrossEntropyLoss):") 
     for metric, value in best_metrics.items():
         print(f"{metric}: {value:.4f}")
 
@@ -300,13 +295,12 @@ def show_and_save_metrics(
     )
 
     logger.info("\n" + "=" * 70)
-    logger.info("COMPONENT 1 CE TRAINING ON VECTORIZED ESSAYS COMPLETED")
+    logger.info("COMPONENT 1 CE TRAINING ON FEATURES COMPLETED (CONV1D)")
     logger.info("=" * 70)
     logger.info("Specifications implemented:")
     logger.info("✓ CrossEntropyLoss for 6-class classification")
-    logger.info("✓ BiLSTMClassifier with attention aggregation")
+    logger.info("✓ Conv1DClassifier with max pooling")
     logger.info("✓ Classes: {0, 40, 80, 120, 160, 200}")
-    logger.info("✓ 768-dimensional BERT embeddings")
     logger.info("✓ All metrics computed in score space")
 
     print(f"\n{'=' * 50}")
@@ -321,12 +315,12 @@ def show_and_save_metrics(
 
 
 def main():
-    """Main training workflow for Component 1 CE on vectorized essays."""
+    """Main training workflow for Component 1 CE on features (Conv1D)."""
     print(f"\n{'=' * 50}")
-    print("Component 1 BiLSTM CE Training on Vectorized Essays")
+    print("Component 1 Conv1D CE Training on Features")
     print(f"{'=' * 50}")
 
-    logger.info("Starting Component 1 CE Training on Vectorized Essays")
+    logger.info("Starting Component 1 CE Training on Features (Conv1D)")
     logger.info("=" * 70)
 
     # Setup
@@ -335,10 +329,10 @@ def main():
     logger.info(f"Using device: {device}")
 
     try:
-        best_metrics = train_on_vectorized_essays_ce(device)
+        best_metrics = train_on_features_ce(device)
 
         model_save_path = (
-            Path(__file__).parent / "runs" / "vectorized_essays_cross_entropy_loss" / "blstm_model"
+            Path(__file__).parent / "runs" / "features_cross_entropy_loss" / "conv1d_model"
         )
         show_and_save_metrics(best_metrics, model_save_path)
 

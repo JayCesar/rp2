@@ -130,6 +130,8 @@ Score-to-class mapping for C1 essay scores:
 
 ### New CE System (✅ Created)
 
+#### BiLSTM CrossEntropy Implementation
+
 **Files Created**:
 - ✅ `ai-analysis/blstm/blstm_cross_entropy_loss.py` - BiLSTMClassifier + mapping utilities (374 lines)
 - ✅ `ai-analysis/blstm/trainer_cross_entropy_loss.py` - BiLSTMCETrainer class (491 lines)
@@ -158,14 +160,84 @@ Score-to-class mapping for C1 essay scores:
 3. **Best Tracking**: Uses best_val_mae like regression system
 4. **Configs**: Full compatibility with existing ModelConfig/TrainConfig/SerializationConfig
 
+#### Conv1D CrossEntropy Implementation
+
+**Date**: 2025-11-10  
+**Status**: ✅ **COMPLETE** - Implementation + Comprehensive Tests
+
+**Files Created**:
+- ✅ `ai-analysis/conv1d/conv1d_cross_entropy_loss.py` - Conv1DClassifier + mapping utilities (163 lines)
+- ✅ `ai-analysis/conv1d/trainer_cross_entropy_loss.py` - Conv1DCETrainer class (278 lines, with fallback imports)
+- ✅ `ai-analysis/conv1d/conv1d_train_on_features_cross_entropy_loss.py` - Features CE script (350 lines)
+- ✅ `ai-analysis/conv1d/conv1d_train_on_vectorized_essays_cross_entropy_loss.py` - Essays CE script (357 lines)
+- ✅ `tests/test_conv1d_cross_entropy_loss_classifier.py` - 24 unit tests (architecture, forward, gradients, devices, masked pooling)
+- ✅ `tests/test_conv1d_cross_entropy_loss_smoke.py` - 2 integration tests (1-epoch training, script imports)
+
+**Design**: Mirrors BLSTM CE implementation exactly:
+- Reuses BLSTM CE mapping utilities (scores_to_class_indices, logits_to_scores, validate_scores_for_ce)
+- Conv1DClassifier with 6-logit classification head replacing regression head
+- Same encoder structure as Conv1DRegressor (conv layers, batch norms, pooling)
+- Handles both 2D features [B, F] and 3D sequences [B, L, D] with masked pooling
+
+**Output Directories**:
+- Features CE: `runs/features_cross_entropy_loss/conv1d_model/`
+- Essays CE: `runs/vectorized_essays_cross_entropy_loss/conv1d_model/`
+
+**Key Implementation Details**:
+1. **Mapping Utilities**: Imported from BLSTM CE (NUM_CLASSES, scores_to_class_indices, etc.)
+2. **Trainer**: Conv1DCETrainer mirrors BiLSTMCETrainer with Conv1D-specific details
+3. **Input Handling**: Features pass lengths=None; sequences use masked pooling
+4. **Metrics**: All computed in score space; best tracking by val MAE
+5. **Configs**: Uses Conv1D ModelConfig/TrainConfig/SerializationConfig
+6. **AMP**: torch.amp.GradScaler for compatibility with conv1d/trainer.py
+
+**Test Results**:
+- ✅ 26/26 tests passing (24 unit + 2 integration)
+- ✅ Architecture, forward pass, gradients, device handling all verified
+- ✅ Masked pooling behavior validated (with appropriate BatchNorm tolerances)
+- ✅ 1-epoch smoke test completes successfully on 500-sample dataset
+- ✅ Checkpoint metadata verified (loss_type: "CrossEntropyLoss")
+- ✅ All predictions in valid C1 score set {0, 40, 80, 120, 160, 200}
+- ✅ Script imports confirmed for both features and vectorized essays training
+
 ---
 
-## Open Questions (To Be Resolved)
+## Training Scripts Quick Reference
+
+### BLSTM CrossEntropy Loss
+```powershell
+# Train on features
+cd ai-analysis/blstm
+python blstm_train_on_features_cross_entropy_loss.py
+
+# Train on vectorized essays
+python blstm_train_on_vectorized_essays_cross_entropy_loss.py
+```
+
+### Conv1D CrossEntropy Loss
+```powershell
+# Train on features
+cd ai-analysis/conv1d
+python conv1d_train_on_features_cross_entropy_loss.py
+
+# Train on vectorized essays
+python conv1d_train_on_vectorized_essays_cross_entropy_loss.py
+```
+
+**Output Directories**:
+- BLSTM Features: `runs/features_cross_entropy_loss/blstm_model/`
+- BLSTM Essays: `runs/vectorized_essays_cross_entropy_loss/blstm_model/`
+- Conv1D Features: `runs/features_cross_entropy_loss/conv1d_model/`
+- Conv1D Essays: `runs/vectorized_essays_cross_entropy_loss/conv1d_model/`
+
+---
+
+## Open Questions (Resolved)
 
 1. ✅ **Option A vs B**: Resolved - using Option B (true classification head)
-2. **Best checkpoint metric**: Confirm unchanged (likely MAE or QWK from regression system)
-3. **OOD labels**: Handling for any labels outside {0,40,80,120,160,200} - assert/raise for now
-4. **Label smoothing**: Default off; can be parameterized if needed later
-5. **Class weighting**: Default uniform; can add if class imbalance is significant
-6. **Snap utility location**: Exists in `blstm.py` as `snap_to_step()`
-7. **Scheduler/early stopping coupling**: Check if loss name affects any logic (unlikely)
+2. ✅ **Best checkpoint metric**: Confirmed - val MAE (same as regression)
+3. ✅ **OOD labels**: Strict validation with validate_scores_for_ce() - raises on invalid
+4. ✅ **Label smoothing**: Not used - default off
+5. ✅ **Class weighting**: Not used - uniform weights
+6. ✅ **Snap utility location**: Exists in common/metrics.py as `snap_to_step()`
+7. ✅ **Scheduler/early stopping**: No coupling - loss name is metadata only

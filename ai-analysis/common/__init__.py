@@ -6,11 +6,19 @@ This package contains reusable components for:
 - Metrics computation
 - Model checkpointing
 - Logging configuration
+- Data loading and dataset utilities
 """
 
+from .data_utils import (
+    EssayDataset,
+    collate_batch,
+    create_data_loader,
+    split_dataset,
+)
 from .device import get_device, set_seed
 from .io_utils import ensure_dir, save_dataset
 from .metrics import MetricsAccumulator, TargetScaler
+from .model_components import AttentionAggregation
 from .setup import configure_cuda_optimizations, setup_logging
 
 __all__ = [
@@ -26,4 +34,11 @@ __all__ = [
     "TargetScaler",
     # Setup
     "setup_logging",
+    # Data utilities
+    "EssayDataset",
+    "collate_batch",
+    "create_data_loader",
+    "split_dataset",
+    # Model components
+    "AttentionAggregation",
 ]

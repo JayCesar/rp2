@@ -1,8 +1,8 @@
 # CrossEntropy Loss Implementation State
 
-**Last Updated**: 2025-11-08 19:50 UTC  
+**Last Updated**: 2025-11-10 18:40 UTC  
 **Implementer**: AI Agent (Warp)  
-**Task**: Add CrossEntropy loss-based classification training to BiLSTM system
+**Task**: Add CrossEntropy loss-based classification training to BiLSTM and Conv1D systems
 
 ---
 
@@ -241,7 +241,9 @@ uv run python ai-analysis\blstm\blstm_train_on_features_cross_entropy_loss.py --
 
 ## ✅ IMPLEMENTATION COMPLETE
 
-**Final Summary**: CrossEntropyLoss classification system fully implemented and tested.
+**Final Summary**: CrossEntropyLoss classification system fully implemented for both BiLSTM and Conv1D.
+
+### BiLSTM CrossEntropy Implementation
 
 **What Was Built**:
 1. BiLSTMClassifier with 6-class head
@@ -256,11 +258,144 @@ uv run python ai-analysis\blstm\blstm_train_on_features_cross_entropy_loss.py --
 - Integration tests: 2 (import + full training)
 - All tests passing
 
-**Key Features**:
-- ✅ Config compatibility (no breaking changes)
-- ✅ Metrics in score space (MAE, RMSE, QWK, etc.)
-- ✅ Checkpoint metadata includes loss_type
-- ✅ Separate run directories
-- ✅ Feature and sequence mode support
+**Files Created**:
+```
+ai-analysis/blstm/blstm_cross_entropy_loss.py                 # 374 lines
+ai-analysis/blstm/trainer_cross_entropy_loss.py               # 491 lines
+ai-analysis/blstm/blstm_train_on_features_cross_entropy_loss.py         # 349 lines
+ai-analysis/blstm/blstm_train_on_vectorized_essays_cross_entropy_loss.py # 356 lines
+tests/test_cross_entropy_loss_mapping.py                      # 23 tests
+tests/test_bilstm_cross_entropy_loss_classifier.py            # 19 tests
+```
 
-**Next Action**: Commit changes per plan
+**Output Directories**:
+- Features: `runs/features_cross_entropy_loss/blstm_model/`
+- Essays: `runs/vectorized_essays_cross_entropy_loss/blstm_model/`
+
+### Conv1D CrossEntropy Implementation (✅ COMPLETE + TESTED)
+
+**Date**: 2025-11-10  
+**Status**: ✅ **COMPLETE** (Implementation + Tests)
+
+**What Was Built**:
+1. Conv1DClassifier with 6-class head (mirrors Conv1DRegressor encoder)
+2. Reuses BLSTM CE mapping utilities (no duplication)
+3. Conv1DCETrainer with full AMP/grad-clip/early-stopping support
+4. Two training scripts: features_ce and vectorized_essays_ce
+5. Strict label validation before training
+6. Input handling for both 2D features and 3D sequences with masked pooling
+7. **Comprehensive test suite (26 tests) ✅ NEW**
+
+**Files Created**:
+```
+# Implementation
+ai-analysis/conv1d/conv1d_cross_entropy_loss.py                 # 163 lines
+ai-analysis/conv1d/trainer_cross_entropy_loss.py               # 278 lines (fixed fallback imports)
+ai-analysis/conv1d/conv1d_train_on_features_cross_entropy_loss.py         # 350 lines
+ai-analysis/conv1d/conv1d_train_on_vectorized_essays_cross_entropy_loss.py # 357 lines
+
+# Tests
+tests/test_conv1d_cross_entropy_loss_classifier.py              # 24 unit tests
+tests/test_conv1d_cross_entropy_loss_smoke.py                   # 2 integration tests
+```
+
+**Test Coverage** (26 tests total, all passing):
+- **Architecture tests** (6): Initialization, components, head output, conv structure, batch norms, pooling options
+- **Forward pass tests** (8): 2D/3D inputs, dtypes, variable lengths, single sample, determinism, both-pooling, backward
+- **predict_scores tests** (4): 2D/3D inputs, valid C1 scores, correct mapping
+- **Gradient tests** (2): All parameters trainable, gradient flow through layers
+- **Device tests** (2): CPU/CUDA compatibility
+- **Masked pooling tests** (2): Padding effect reduction, masked vs unpadded
+- **Integration tests** (2): Full 1-epoch training smoke test, script imports
+
+**Output Directories**:
+- Features: `runs/features_cross_entropy_loss/conv1d_model/`
+- Essays: `runs/vectorized_essays_cross_entropy_loss/conv1d_model/`
+
+**Design Highlights**:
+- Mirrors BLSTM CE implementation exactly for consistency
+- Imports mapping utilities from BLSTM CE (scores_to_class_indices, logits_to_scores, validate_scores_for_ce)
+- Conv1DClassifier reuses Conv1DRegressor encoder (conv layers, batch norms, pooling)
+- Handles lengths=None for features, lengths tensor for sequences
+- Uses torch.amp.GradScaler for parity with conv1d/trainer.py
+- Best checkpoint tracking by validation MAE
+- All metrics computed in score space
+
+**Test Results**:
+- ✅ 26/26 tests passing
+- ✅ Smoke test: 1-epoch training on 500 samples completes successfully
+- ✅ Checkpoint metadata includes `loss_type: "CrossEntropyLoss"`
+- ✅ All predictions in valid C1 score set {0, 40, 80, 120, 160, 200}
+- ✅ Import tests pass for both features and vectorized essays scripts
+
+### Shared Features Across Both Implementations
+
+- ✅ Config compatibility (no breaking changes)
+- ✅ Metrics in score space (MAE, RMSE, QWK, Kappa, Pearson, step_accuracy)
+- ✅ Checkpoint metadata includes `loss_type: "CrossEntropyLoss"`
+- ✅ Separate run directories (no collision with regression runs)
+- ✅ Strict label validation (only {0,40,80,120,160,200} allowed)
+- ✅ Best tracking by validation MAE
+- ✅ No class weights or label smoothing
+
+**Next Action**: ✅ **Testing complete! Ready for production training runs**
+
+---
+
+## ✅ TESTING COMPLETION UPDATE (2025-11-10 19:00 UTC)
+
+**Task Completed**: Created comprehensive test suite for Conv1D CrossEntropy Loss implementation
+
+### Tests Created
+
+1. **test_conv1d_cross_entropy_loss_classifier.py** (24 tests)
+   - Mirrors structure of test_bilstm_cross_entropy_loss_classifier.py
+   - Covers architecture, forward pass, predict_scores, gradients, device handling, masked pooling
+   - All tests passing with appropriate tolerances for BatchNorm effects
+
+2. **test_conv1d_cross_entropy_loss_smoke.py** (2 tests)
+   - Full 1-epoch training integration test on 500-sample dataset
+   - Script import validation tests
+   - Verifies checkpoint metadata and prediction validity
+
+### Test Execution Results
+
+```powershell
+# Run Conv1D CE tests
+uv run pytest tests/test_conv1d_cross_entropy_loss_classifier.py tests/test_conv1d_cross_entropy_loss_smoke.py -v
+```
+
+**Result**: ✅ 26/26 tests passing in ~4 seconds
+
+### Key Fixes Applied
+
+1. **Import handling**: Added fallback imports in `trainer_cross_entropy_loss.py` for compatibility with test sys.path manipulation
+2. **Masked pooling tests**: Adjusted tolerances to account for BatchNorm statistics differences (inherent to Conv1D architecture)
+3. **Test isolation**: Used dropout=0.0 configs for deterministic masked pooling tests
+
+### Combined Test Coverage
+
+**Total CrossEntropy Loss Tests**: 70 tests (44 BiLSTM + 26 Conv1D)
+- All tests passing
+- Smoke tests verify end-to-end training pipelines
+- Predictions validated against valid C1 score set
+- Checkpoint metadata verified
+
+### Ready for Production
+
+✅ **All prerequisites met for running full Conv1D CE training**:
+1. Implementation complete and tested
+2. Unit tests cover all critical paths
+3. Integration tests verify end-to-end workflow
+4. Import compatibility confirmed
+5. Checkpoint format validated
+
+**Next step**: Run full training with:
+```powershell
+# Features CE training
+cd ai-analysis/conv1d
+uv run python conv1d_train_on_features_cross_entropy_loss.py
+
+# Vectorized essays CE training
+uv run python conv1d_train_on_vectorized_essays_cross_entropy_loss.py
+```

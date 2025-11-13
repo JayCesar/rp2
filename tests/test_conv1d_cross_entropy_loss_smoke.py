@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke tests for CrossEntropy Loss training integration.
+"""Smoke tests for Conv1D CrossEntropy Loss training integration.
 
 Validates end-to-end integration by running 1 epoch on a tiny dataset:
 - Data loading and preprocessing
@@ -8,6 +8,8 @@ Validates end-to-end integration by running 1 epoch on a tiny dataset:
 - Validation with metric computation
 - Checkpoint and prediction saving
 - Predictions are valid scores from {0, 40, 80, 120, 160, 200}
+
+Mirrors test_smoke_cross_entropy_loss.py but for Conv1D.
 """
 
 import logging
@@ -23,19 +25,17 @@ import torch
 from torch.utils.data import DataLoader
 
 # Add parent to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "ai-analysis" / "blstm"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "ai-analysis" / "conv1d"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "ai-analysis"))
 
-from blstm import (
+from conv1d import (
     ModelConfig,
     SerializationConfig,
-    TargetScaler,
     TrainConfig,
-    set_seed,
 )
-from blstm_cross_entropy_loss import BiLSTMClassifier, validate_scores_for_ce
-from trainer_cross_entropy_loss import BiLSTMCETrainer
-from common import EssayDataset, create_data_loader, split_dataset
+from conv1d_cross_entropy_loss import Conv1DClassifier, validate_scores_for_ce
+from trainer_cross_entropy_loss import Conv1DCETrainer
+from common import EssayDataset, TargetScaler, create_data_loader, split_dataset, set_seed
 
 project_root = Path(__file__).parent.parent
 logger = logging.getLogger(__name__)
@@ -68,14 +68,14 @@ def tiny_dataset():
 @pytest.fixture
 def smoke_configs(tiny_dataset):
     """Create minimal configs for smoke testing."""
-    # Model config
+    # Model config - small Conv1D
     model_config = ModelConfig(
-        hidden_sizes=[8, 8, 8],  # Tiny model with 3 layers
+        conv_filters=[16, 32],  # Small filters for fast tests
+        kernel_sizes=[3, 3],
         input_dim=len(tiny_dataset.feature_cols),
-        aggregation="mean",  # Simplest aggregation
-        token_proj_dim=None,
-        mlp_hidden=None,
-        use_layer_norm=False,
+        dense_neurons=32,  # Small dense layer
+        dropout=0.1,
+        pooling="max",
     )
     
     # Train config - 1 epoch, fast
@@ -84,8 +84,6 @@ def smoke_configs(tiny_dataset):
         batch_size=16,
         lr=1e-3,
         optimizer="adamw",
-        scheduler="none",
-        grad_clip_norm=1.0,
         early_stopping_patience=999,  # Don't stop
         use_amp=False,  # Simpler for testing
     )
@@ -96,7 +94,7 @@ def smoke_configs(tiny_dataset):
 @pytest.fixture
 def smoke_output_dir(tmp_path):
     """Create temporary output directory."""
-    output_dir = tmp_path / "smoke_test_ce"
+    output_dir = tmp_path / "smoke_test_conv1d_ce"
     output_dir.mkdir(parents=True, exist_ok=True)
     yield output_dir
     # Cleanup after test
@@ -104,8 +102,8 @@ def smoke_output_dir(tmp_path):
         shutil.rmtree(output_dir)
 
 
-def test_ce_training_smoke(tiny_dataset, smoke_configs, smoke_output_dir):
-    """Smoke test: Run 1 epoch of CE training on tiny dataset."""
+def test_conv1d_ce_training_smoke(tiny_dataset, smoke_configs, smoke_output_dir):
+    """Smoke test: Run 1 epoch of Conv1D CE training on tiny dataset."""
     set_seed(42)
     device = torch.device("cpu")  # Use CPU for reproducibility
     
@@ -117,7 +115,7 @@ def test_ce_training_smoke(tiny_dataset, smoke_configs, smoke_output_dir):
     assert len(val_dataset) > 0, "Val dataset empty"
     
     # Verify all targets are valid CE scores
-    all_scores = tiny_dataset.data["c1"].to_numpy().copy()  # Copy to avoid non-writable tensor warning
+    all_scores = tiny_dataset.data["c1"].to_numpy().copy()
     validate_scores_for_ce(torch.from_numpy(all_scores))
     
     # Create loaders
@@ -129,7 +127,7 @@ def test_ce_training_smoke(tiny_dataset, smoke_configs, smoke_output_dir):
     )
     
     # Create model
-    model = BiLSTMClassifier(model_config)
+    model = Conv1DClassifier(model_config)
     
     # Create trainer
     target_scaler = TargetScaler("none")
@@ -139,7 +137,7 @@ def test_ce_training_smoke(tiny_dataset, smoke_configs, smoke_output_dir):
         output_dir=smoke_output_dir, save_best_only=False, keep_last_k=1
     )
     
-    trainer = BiLSTMCETrainer(
+    trainer = Conv1DCETrainer(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
@@ -189,14 +187,14 @@ def test_ce_training_smoke(tiny_dataset, smoke_configs, smoke_output_dir):
     logger.info(f"Smoke test passed! Best MAE: {best_metrics['mae']:.2f}")
 
 
-def test_ce_features_script_imports():
-    """Test that CE training scripts can be imported without errors."""
+def test_conv1d_ce_features_script_imports():
+    """Test that Conv1D CE training scripts can be imported without errors."""
     try:
-        from blstm_train_on_features_cross_entropy_loss import (
+        from conv1d_train_on_features_cross_entropy_loss import (
             create_component1_config_for_features,
             create_training_config,
         )
-        from blstm_train_on_vectorized_essays_cross_entropy_loss import (
+        from conv1d_train_on_vectorized_essays_cross_entropy_loss import (
             create_component1_config_for_vectorized_essays,
         )
         
@@ -211,7 +209,7 @@ def test_ce_features_script_imports():
         assert isinstance(essays_model_config, ModelConfig)
         
     except ImportError as e:
-        pytest.fail(f"Failed to import CE training scripts: {e}")
+        pytest.fail(f"Failed to import Conv1D CE training scripts: {e}")
 
 
 if __name__ == "__main__":

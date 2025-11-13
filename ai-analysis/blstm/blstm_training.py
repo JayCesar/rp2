@@ -705,7 +705,7 @@ def train_on_vectorized_essays(device: torch.device) -> None:
         f"Essay token embeddings shape: {dataset.schema['essay_token_embeddings']}"
     )
 
-    dataset = EssayDataset(dataset, feature_cols=[])
+    dataset = EssayDataset(dataset)
 
     # Train using standard BiLSTMRegressor (approximated specifications)
     logger.info("\n" + "=" * 70)
@@ -768,7 +768,7 @@ def train_on_features(device: torch.device) -> None:
     )
     logger.info(f"Loaded dataset with {len(dataset)} essays: {dataset}")
 
-    dataset = EssayDataset(dataset, feature_cols=[])
+    dataset = EssayDataset(dataset)
 
     # Train using standard BiLSTMRegressor (approximated specifications)
     logger.info("\n" + "=" * 70)
