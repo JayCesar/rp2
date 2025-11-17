@@ -16,6 +16,11 @@ from .data_utils import (
     split_dataset,
 )
 from .device import get_device, set_seed
+from .gamma_search import (
+    DEFAULT_GAMMA_VALUES,
+    metric_key_for_selection,
+    run_gamma_search,
+)
 from .io_utils import ensure_dir, save_dataset
 from .metrics import MetricsAccumulator, TargetScaler
 from .model_components import AttentionAggregation
@@ -41,4 +46,8 @@ __all__ = [
     "split_dataset",
     # Model components
     "AttentionAggregation",
+    # Gamma search utilities
+    "DEFAULT_GAMMA_VALUES",
+    "metric_key_for_selection",
+    "run_gamma_search",
 ]

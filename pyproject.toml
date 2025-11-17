@@ -11,9 +11,9 @@ dependencies = [
 	"polars[all]>=1.32.3",
 	"scikit-learn>=1.7.1",
 	"spacy[lookups,transformers]>=3.8.7",
-	"torch",
-	"torchvision",
-	"torchaudio",
+	"torch==2.9.0",
+	"torchvision==0.24.0",
+	"torchaudio==2.9.0",
 	"transformers[torch]>=4.49.0",
 	"markupsafe",
 ]

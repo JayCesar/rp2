@@ -34,7 +34,11 @@ from conv1d import (
 
 # Import CE-specific components
 from conv1d_cross_entropy_loss import Conv1DClassifier, validate_scores_for_ce
-from trainer_cross_entropy_loss import Conv1DCETrainer
+from conv1d_trainer_cross_entropy_loss import Conv1DCETrainer
+from calculate_class_frequencies import (
+    get_class_frequencies,
+    print_class_distribution,
+)
 
 # Import common modules
 sys.path.append(str(Path(__file__).parent.parent))
@@ -123,6 +127,11 @@ def train_on_features_ce(device: torch.device) -> dict[str, float]:
     # Split dataset
     train_dataset, val_dataset, test_dataset = split_dataset(dataset, seed=42)
 
+    # Calculate class frequencies for inverse frequency weighting
+    class_frequencies = get_class_frequencies(train_dataset)
+    logger.info("Training set class distribution:")
+    print_class_distribution(class_frequencies)
+
     # Target scaler (not used for CE but keep for API parity)
     target_scaler = TargetScaler("none")
     target_scaler.fit(np.array(all_scores))
@@ -164,7 +173,9 @@ def train_on_features_ce(device: torch.device) -> dict[str, float]:
     logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
 
     # Setup training
-    output_dir = Path(__file__).parent / "runs" / "features_cross_entropy_loss" / "conv1d_model"
+    output_dir = (
+        Path(__file__).parent / "runs" / "features_cross_entropy_loss" / "conv1d_model"
+    )
     serialization_config = SerializationConfig(
         output_dir=output_dir, save_best_only=True, keep_last_k=3
     )
@@ -178,6 +189,7 @@ def train_on_features_ce(device: torch.device) -> dict[str, float]:
         serialization_config=serialization_config,
         target_scaler=target_scaler,
         device=device,
+        class_frequencies=class_frequencies,
     )
 
     # Train model
@@ -275,7 +287,7 @@ def show_and_save_metrics(
     logger.info("CE Training completed successfully")
 
     # Final metrics display
-    print("\nFinal validation metrics (CrossEntropyLoss):") 
+    print("\nFinal validation metrics (CrossEntropyLoss):")
     for metric, value in best_metrics.items():
         print(f"{metric}: {value:.4f}")
 
@@ -332,7 +344,10 @@ def main():
         best_metrics = train_on_features_ce(device)
 
         model_save_path = (
-            Path(__file__).parent / "runs" / "features_cross_entropy_loss" / "conv1d_model"
+            Path(__file__).parent
+            / "runs"
+            / "features_cross_entropy_loss"
+            / "conv1d_model"
         )
         show_and_save_metrics(best_metrics, model_save_path)
 

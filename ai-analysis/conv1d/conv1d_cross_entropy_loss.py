@@ -18,8 +18,8 @@ import torch.nn as nn
 from conv1d import ModelConfig, masked_avgpool_1d, masked_maxpool_1d
 
 # Import BLSTM CE mapping utilities
-sys.path.append(str(Path(__file__).parent.parent))
-from blstm.blstm_cross_entropy_loss import (
+sys.path.append(str(Path(__file__).parent.parent / "blstm"))
+from blstm_cross_entropy_loss import (
     NUM_CLASSES,
     scores_to_class_indices,
     class_indices_to_scores,

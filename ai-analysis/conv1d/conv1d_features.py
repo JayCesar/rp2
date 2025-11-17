@@ -25,7 +25,8 @@ if str(project_root / "ai-analysis") not in sys.path:
     sys.path.insert(0, str(project_root / "ai-analysis"))
 
 from feature_extraction.utils import logger
-from blstm.blstm import MetricsAccumulator, TargetScaler, get_device, set_seed
+sys.path.insert(0, str(project_root / "ai-analysis" / "blstm"))
+from blstm import MetricsAccumulator, TargetScaler, get_device, set_seed
 from conv1d import (
     Conv1DRegressor,
     EssayDataset,

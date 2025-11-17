@@ -34,7 +34,7 @@ from conv1d import (
     TrainConfig,
 )
 from conv1d_cross_entropy_loss import Conv1DClassifier, validate_scores_for_ce
-from trainer_cross_entropy_loss import Conv1DCETrainer
+from conv1d_trainer_cross_entropy_loss import Conv1DCETrainer
 from common import EssayDataset, TargetScaler, create_data_loader, split_dataset, set_seed
 
 project_root = Path(__file__).parent.parent

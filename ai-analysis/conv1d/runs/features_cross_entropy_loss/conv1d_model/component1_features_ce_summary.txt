@@ -27,10 +27,8 @@ Training Configuration:
 {'epochs': 50, 'batch_size': 32, 'lr': 0.00706, 'weight_decay': 0.000661, 'optimizer': 'adamw', 'early_stopping_patience': 3, 'use_amp': True, 'amp_dtype': 'torch.bfloat16', 'target_scaler': 'none', 'seed': 42, 'device': 'auto', 'grad_clip_norm': 1.0}
 
 Best Validation Metrics:
-{'loss': 1130.558349609375, 'mae': 21.522842407226562, 'rmse': 33.623775482177734, 'r2': -0.06081807613372803, 'kappa': 0.1480760216949758, 'qwk': 0.2201587529092187, 'pearson_corr': 0.2508144974708557, 'step_accuracy': 0.5279187817258884, 'mae_step': 21.522842639593907, 'count': 985}
+{'loss': 1884.263916015625, 'mae': 32.56852722167969, 'rmse': 43.40810775756836, 'r2': -0.7459628582000732, 'kappa': 0.1427888524349038, 'qwk': 0.32463823282898896, 'pearson_corr': 0.3546317517757416, 'step_accuracy': 0.35126903553299493, 'mae_step': 32.568527918781726, 'count': 985}
 
 Training History (last 10 epochs):
-  Epoch 1: Train Loss=1.170796, Val MAE=21.52, Val RMSE=33.62, Val Kappa=0.15, Val QWK=0.22, Val R²=-0.06, Val Pearson=0.25, Val Step Acc=0.528, Time=13.0s
-  Epoch 2: Train Loss=1.117181, Val MAE=21.85, Val RMSE=33.82, Val Kappa=0.12, Val QWK=0.19, Val R²=-0.07, Val Pearson=0.22, Val Step Acc=0.520, Time=0.7s
-  Epoch 3: Train Loss=1.118631, Val MAE=23.15, Val RMSE=34.95, Val Kappa=0.02, Val QWK=0.03, Val R²=-0.15, Val Pearson=0.10, Val Step Acc=0.497, Time=0.9s
-  Epoch 4: Train Loss=1.095067, Val MAE=21.52, Val RMSE=33.28, Val Kappa=0.15, Val QWK=0.26, Val R²=-0.04, Val Pearson=0.30, Val Step Acc=0.520, Time=0.8s
+  Epoch 1: Train Loss=1.780871, Val MAE=47.43, Val RMSE=56.25, Val Kappa=-0.00, Val QWK=0.05, Val R²=-1.93, Val Pearson=0.16, Val Step Acc=0.175, Time=11.8s
+  Epoch 2: Train Loss=1.765680, Val MAE=32.57, Val RMSE=43.41, Val Kappa=0.14, Val QWK=0.32, Val R²=-0.75, Val Pearson=0.35, Val Step Acc=0.351, Time=0.7s

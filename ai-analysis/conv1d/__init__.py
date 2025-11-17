@@ -12,7 +12,7 @@ from .conv1d import (
     masked_maxpool_1d,
     split_dataset,
 )
-from .trainer import Trainer
+from .conv1d_trainer import Trainer
 
 __all__ = [
     "Conv1DRegressor",

@@ -33,7 +33,11 @@ from conv1d import (
 
 # Import CE-specific components
 from conv1d_cross_entropy_loss import Conv1DClassifier, validate_scores_for_ce
-from trainer_cross_entropy_loss import Conv1DCETrainer
+from conv1d_trainer_cross_entropy_loss import Conv1DCETrainer
+from calculate_class_frequencies import (
+    get_class_frequencies,
+    print_class_distribution,
+)
 
 # Import common modules
 sys.path.append(str(Path(__file__).parent.parent))
@@ -138,6 +142,11 @@ def train_on_vectorized_essays_ce(device: torch.device) -> dict[str, float]:
     # Split dataset
     train_dataset, val_dataset, test_dataset = split_dataset(dataset, seed=42)
 
+    # Calculate class frequencies for inverse frequency weighting
+    class_frequencies = get_class_frequencies(train_dataset)
+    logger.info("Training set class distribution:")
+    print_class_distribution(class_frequencies)
+
     # Target scaler (not used for CE but keep for API parity)
     target_scaler = TargetScaler("none")
     target_scaler.fit(np.array(all_scores))
@@ -184,6 +193,7 @@ def train_on_vectorized_essays_ce(device: torch.device) -> dict[str, float]:
         serialization_config=serialization_config,
         target_scaler=target_scaler,
         device=device,
+        class_frequencies=class_frequencies,
     )
 
     # Train model
