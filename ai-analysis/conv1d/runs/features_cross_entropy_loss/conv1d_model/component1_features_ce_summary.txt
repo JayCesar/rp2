@@ -1,0 +1,34 @@
+Component 1 Training on Features with CrossEntropyLoss (Conv1D)
+==================================================
+
+Classification Specifications:
+- Loss: CrossEntropyLoss
+- Classes: 6 (0, 40, 80, 120, 160, 200)
+- Model: Conv1DClassifier
+- Conv filters: 28, 39
+- Dense neurons: 90
+- Optimizer: AdamW
+- Learning Rate: 7.06e-3
+- Dropout rate: 0.303
+- Weight Decay (L2): 6.61e-4
+
+Data Statistics:
+- Total essays: 6568
+- Training set: 4598
+- Validation set: 985
+- Test set: 985
+- Feature dimension: 32
+- C1 score range: 0-200
+
+Model Configuration:
+{'conv_filters': [28, 39], 'kernel_sizes': [3, 3], 'input_dim': 32, 'dropout': 0.303, 'dense_neurons': 90, 'pooling': 'max', 'output_range': (0, 200)}
+
+Training Configuration:
+{'epochs': 50, 'batch_size': 32, 'lr': 0.00706, 'weight_decay': 0.000661, 'optimizer': 'adamw', 'early_stopping_patience': 3, 'use_amp': True, 'amp_dtype': 'torch.bfloat16', 'target_scaler': 'none', 'seed': 42, 'device': 'auto', 'grad_clip_norm': 1.0}
+
+Best Validation Metrics:
+{'loss': 1884.263916015625, 'mae': 32.56852722167969, 'rmse': 43.40810775756836, 'r2': -0.7459628582000732, 'kappa': 0.1427888524349038, 'qwk': 0.32463823282898896, 'pearson_corr': 0.3546317517757416, 'step_accuracy': 0.35126903553299493, 'mae_step': 32.568527918781726, 'count': 985}
+
+Training History (last 10 epochs):
+  Epoch 1: Train Loss=1.780871, Val MAE=47.43, Val RMSE=56.25, Val Kappa=-0.00, Val QWK=0.05, Val R²=-1.93, Val Pearson=0.16, Val Step Acc=0.175, Time=11.8s
+  Epoch 2: Train Loss=1.765680, Val MAE=32.57, Val RMSE=43.41, Val Kappa=0.14, Val QWK=0.32, Val R²=-0.75, Val Pearson=0.35, Val Step Acc=0.351, Time=0.7s

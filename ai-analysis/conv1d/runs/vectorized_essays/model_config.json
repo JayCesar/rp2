@@ -1,0 +1,18 @@
+{
+  "conv_filters": [
+    28,
+    39
+  ],
+  "kernel_sizes": [
+    3,
+    3
+  ],
+  "input_dim": 768,
+  "dropout": 0.303,
+  "dense_neurons": 90,
+  "pooling": "max",
+  "output_range": [
+    0,
+    200
+  ]
+}

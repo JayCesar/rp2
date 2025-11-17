@@ -11,12 +11,17 @@ logger = utils.logger
 
 # Configuration
 MODEL_NAME = "neuralmind/bert-base-portuguese-cased"  # BERTimbau
-MAX_LENGTH = 512  # BERT maximum sequence length
+MAX_LENGTH = 128  # Use 128 tokens to match BLSTM preprocessed dataset
 MAX_SAMPLES = None  # Set to None to use all samples
+
+# Initialize device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+logger.info(f"Using device: {device}")
 
 # Initialize model
 logger.info(f"Loading model from {MODEL_NAME}")
 model = transformers.AutoModel.from_pretrained(MODEL_NAME)
+model = model.to(device)
 logger.info("model loaded")
 
 # Initialize tokenizer
@@ -38,25 +43,37 @@ def vectorize_essay(essay, idx):
     if idx % 10 == 0:
         logger.info(f"vectorize_essay: essay {idx}")
 
-    tokenized_essay = tokenizer.encode(
+    # Use tokenizer() to get both input_ids and attention_mask
+    tokenized_inputs = tokenizer(
         essay,
         truncation=True,
         max_length=MAX_LENGTH,
+        padding="max_length",  # Pad to MAX_LENGTH for consistent sequence length
         return_tensors="pt",
     )
 
-    with torch.no_grad():
-        # Get BERT embeddings using the underlying BERT model
-        # instead of going through the custom model's forward method
-        bert_outputs = model(tokenized_essay)
-        # # Use the [CLS] token representation (first token) from last hidden state
-        cls_token_vector = bert_outputs.pooler_output
+    # Move inputs to device
+    tokenized_inputs = {k: v.to(device) for k, v in tokenized_inputs.items()}
 
-    return cls_token_vector
+    with torch.no_grad():
+        # Get BERT embeddings for all tokens
+        bert_outputs = model(**tokenized_inputs)
+        # Use all token embeddings from last hidden state
+        # Shape: [1, MAX_LENGTH, 768] = [1, 128, 768]
+        all_token_embeddings = bert_outputs.last_hidden_state
+
+        # Remove batch dimension and return as numpy array: [128, 768]
+        token_embeddings = all_token_embeddings.squeeze(0).cpu().numpy()
+
+    return token_embeddings
 
 
 def load_and_preprocess_dataset(csv_path) -> pl.DataFrame:
     logger.info(f"Loading dataset from {csv_path}...")
+    if MAX_SAMPLES is not None:
+        logger.info(f"Applying row limit: {MAX_SAMPLES}")
+    else:
+        logger.info("No row limit applied. Processing all essays")
 
     relevant_columns = ["c1", "essay_as_single_utf8_string", "prompt"]
     DEFAULT_MAX_SAMPLE_SIZE = 2**31 - 1
@@ -70,17 +87,51 @@ def load_and_preprocess_dataset(csv_path) -> pl.DataFrame:
     logger.info(f"Dataset loaded from {csv_path}\n")
 
     logger.info("Vectorizing dataset's essays...")
-    dataset = dataset.with_columns(
-        pl.col("essay_as_single_utf8_string")
-        .map_batches(
-            lambda essays: pl.Series(
-                (vectorize_essay(essay, idx) for idx, essay in enumerate(essays))
-            ),
-            return_dtype=pl.Array(pl.Float32, 768),
+    # Build both columns lazily and collect once
+    dataset = (
+        dataset.with_columns(
+            pl.col("essay_as_single_utf8_string")
+            .map_batches(
+                lambda essays: pl.Series(
+                    values=(
+                        vectorize_essay(essay, idx).tolist()
+                        for idx, essay in enumerate(essays)
+                    ),
+                    dtype=pl.Array(pl.Array(pl.Float32, 768), MAX_LENGTH),
+                ),
+                return_dtype=pl.Array(
+                    pl.Array(pl.Float32, 768), MAX_LENGTH
+                ),  # [128, 768]
+            )
+            .alias("essay_token_embeddings")  # token-level embeddings
         )
-        .alias("essay_vector")
-    ).collect()
-    logger.info(f"Dataset with {len(dataset)} samples:\n{dataset.head(10)}")
+        .with_columns(
+            pl.col("essay_as_single_utf8_string")
+            .map_batches(
+                lambda essays: pl.Series(
+                    values=(
+                        int(
+                            tokenizer(
+                                essay,
+                                truncation=True,
+                                max_length=MAX_LENGTH,
+                                padding="max_length",
+                                return_tensors="pt",
+                            )["attention_mask"]
+                            .sum()
+                            .item()
+                        )
+                        for idx, essay in enumerate(essays)
+                    ),
+                    dtype=pl.Int32,
+                ),
+                return_dtype=pl.Int32,
+            )
+            .alias("essay_token_length")
+        )
+        .collect()
+    )
+    logger.info(f"Dataset with {len(dataset)} samples:\n{dataset}")
 
     return dataset
 
@@ -112,11 +163,11 @@ def main():
 
     dataset_with_vectorized_essays = load_and_preprocess_dataset(csv_dataset_file_path)
 
-    generated_dataset_extensions = "parquet", "json"
+    generated_dataset_extension = "parquet"
     utils.save_dataset(
         dataset_with_vectorized_essays,
         "extended_essay-br_preprocessed_for_BLSTM",
-        *generated_dataset_extensions,
+        generated_dataset_extension,
     )
 
 

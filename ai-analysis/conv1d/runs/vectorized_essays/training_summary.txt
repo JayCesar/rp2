@@ -1,0 +1,40 @@
+Conv1D Training on Vectorized Essays
+======================================================================
+
+Architecture: {'conv_filters': [28, 39], 'kernel_sizes': [3, 3], 'input_dim': 768, 'dropout': 0.303, 'dense_neurons': 90, 'pooling': 'max', 'output_range': (0, 200)}
+Training: {'epochs': 50, 'batch_size': 32, 'lr': 0.00706, 'weight_decay': 0.000661, 'optimizer': 'adamw', 'early_stopping_patience': 3, 'use_amp': True, 'amp_dtype': 'torch.bfloat16', 'target_scaler': 'none', 'seed': 42, 'device': 'auto', 'grad_clip_norm': 1.0}
+
+Dataset: Train=4913, Val=655, Test=983
+
+Best Val Metrics: {
+  "loss": 2494.504638671875,
+  "mae": 44.42786407470703,
+  "rmse": 49.94501495361328,
+  "r2": -1.2925152778625488,
+  "kappa": -0.07489849805513749,
+  "qwk": 0.13699092289245607,
+  "pearson_corr": 0.47078824043273926,
+  "step_accuracy": 0.11755725190839694,
+  "mae_step": 46.534351145038165,
+  "count": 655
+}
+Test Metrics: {
+  "loss": 3644.71923828125,
+  "mae": 55.19633865356445,
+  "rmse": 60.37150955200195,
+  "r2": -2.322852849960327,
+  "kappa": -0.03073788909194408,
+  "qwk": 0.05477022115417862,
+  "pearson_corr": 0.45274651050567627,
+  "step_accuracy": 0.07426246185147507,
+  "mae_step": 54.526958290946084,
+  "count": 983
+}
+
+Training History (last 10):
+  Epoch 1: Loss=32.4248, MAE=47.18, RMSE=52.81, R²=-1.56, Time=62.3s
+  Epoch 2: Loss=24.6679, MAE=50.68, RMSE=55.98, R²=-1.88, Time=6.7s
+  Epoch 3: Loss=23.7879, MAE=44.43, RMSE=49.95, R²=-1.29, Time=6.0s
+  Epoch 4: Loss=24.1064, MAE=54.64, RMSE=59.91, R²=-2.30, Time=6.2s
+  Epoch 5: Loss=23.2391, MAE=50.22, RMSE=55.48, R²=-1.83, Time=6.1s
+  Epoch 6: Loss=22.8178, MAE=54.11, RMSE=59.11, R²=-2.21, Time=5.7s

@@ -34,7 +34,6 @@ Metrics:
 """
 
 import logging
-import os
 import pathlib
 import random
 from dataclasses import asdict, dataclass
@@ -47,7 +46,6 @@ import scipy.stats
 import sklearn.metrics
 import torch
 import torch.nn as nn
-from torch.cuda.amp import autocast
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence, pad_sequence
 from torch.utils.data import DataLoader, Dataset, Subset, random_split
 
@@ -91,9 +89,10 @@ class ModelConfig:
     num_layers: int = 3
     # bidirectional: bool = True
     dropout: float = 1.64e-01
-    aggregation: Literal["last", "mean", "max", "attn"] = "last"
+    aggregation: Literal["last", "mean", "max", "attn"] = "attn"
     mlp_hidden: int | None = None
     use_layer_norm: bool = False
+    token_proj_dim: int | None = None  # Optional token projection before LSTMs
     output_range: tuple[int, int] = (ScoreConstants.MIN, ScoreConstants.MAX)
 
     def to_dict(self) -> dict[str, int | float | bool | str | tuple[int, int]]:
@@ -106,39 +105,39 @@ class ModelConfig:
         return cls(**d)
 
 
-@dataclass
-class DataConfig:
-    """Configuration for data loading and preprocessing."""
-
-    train_csv: str | None = None
-    val_csv: str | None = None
-    test_csv: str | None = None
-    id_column: str = "id"
-    embedding_column: str = "embedding_path"
-    score_column: str = "c1"
-    embedding_format: Literal["npy", "pt", "auto"] = "auto"
-    max_seq_len: int = 1024
-    pad_value: float = 0.0
-    num_workers: int = 4
-    pin_memory: bool = True
-    persistent_workers: bool = True
-    val_split: float = 0.1
-    test_split: float = 0.0
-    shuffle: bool = True
-
-    def to_dict(self) -> dict[str, str | int | float | bool | None]:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, d: dict[str, str | int | float | bool | None]) -> "DataConfig":
-        return cls(**d)
+# @dataclass
+# class DataConfig:
+#     """Configuration for data loading and preprocessing."""
+#
+#     train_csv: str | None = None
+#     val_csv: str | None = None
+#     test_csv: str | None = None
+#     id_column: str = "id"
+#     embedding_column: str = "embedding_path"
+#     score_column: str = "c1"
+#     embedding_format: Literal["npy", "pt", "auto"] = "auto"
+#     max_seq_len: int = 1024
+#     pad_value: float = 0.0
+#     num_workers: int = 4
+#     pin_memory: bool = True
+#     persistent_workers: bool = True
+#     val_split: float = 0.1
+#     test_split: float = 0.0
+#     shuffle: bool = True
+#
+#     def to_dict(self) -> dict[str, str | int | float | bool | None]:
+#         return asdict(self)
+#
+#     @classmethod
+#     def from_dict(cls, d: dict[str, str | int | float | bool | None]) -> "DataConfig":
+#         return cls(**d)
 
 
 @dataclass
 class TrainConfig:
     """Configuration for training parameters."""
 
-    epochs: int = 25
+    epochs: int = 50
     batch_size: int = 32
     lr: float = 1.01e-03
     weight_decay: float = 4.67e-06
@@ -396,11 +395,9 @@ class EssayDataset(Dataset):
         return self.records.row(idx, named=True)
 
     def __getitems__(self, indices):
-        return (
-            self.records.with_row_index(name="index")
-            .filter(pl.col("index").is_in(indices))
-            .to_dicts()
-        )
+        # Lightweight batched getter to avoid heavy DataFrame ops in worker processes
+        # and prevent DataLoader hangs due to excessive I/O or non-picklable state.
+        return [self.__getitem__(idx) for idx in indices]
 
 
 def collate_batch(
@@ -429,7 +426,7 @@ def collate_batch(
 
 def split_dataset(
     dataset: EssayDataset,
-    val_ratio: float = 0.1,
+    val_ratio: float = 0.15,
     test_ratio: float = 0.15,
     seed: int = 42,
 ) -> tuple[Subset, Subset, Subset]:
@@ -486,12 +483,25 @@ class BiLSTMRegressor(nn.Module):
         super().__init__()
         self.config = config
 
+        # Optional token projection to reduce 768-dim input noise and size
+        if self.config.token_proj_dim and self.config.token_proj_dim > 0:
+            self.token_proj = nn.Sequential(
+                nn.LayerNorm(self.config.input_dim),
+                nn.Linear(self.config.input_dim, self.config.token_proj_dim),
+                nn.GELU(),
+                nn.Dropout(self.config.dropout),
+            )
+            lstm_input_dim = self.config.token_proj_dim
+        else:
+            self.token_proj = nn.Identity()
+            lstm_input_dim = self.config.input_dim
+
         # LSTM layers with per-layer hidden sizes
         hs1, hs2, hs3 = self.config.hidden_sizes[:3]
         direction_multiplier = 2  # bidirectional
 
         self.lstm1 = nn.LSTM(
-            input_size=self.config.input_dim,
+            input_size=lstm_input_dim,
             hidden_size=hs1,
             num_layers=1,
             batch_first=True,
@@ -523,12 +533,30 @@ class BiLSTMRegressor(nn.Module):
         else:
             self.aggregation = None
 
-        # Output head: single linear readout (no hidden MLP)
-        self.head = nn.Linear(lstm_output_size, 1)
+        # Pre-head normalization (optional)
+        self.pre_head_norm = (
+            nn.LayerNorm(lstm_output_size)
+            if self.config.use_layer_norm
+            else nn.Identity()
+        )
+
+        # Output head: optional MLP for better mapping/calibration
+        if self.config.mlp_hidden:
+            self.head = nn.Sequential(
+                nn.Linear(lstm_output_size, self.config.mlp_hidden),
+                nn.GELU(),
+                nn.Dropout(self.config.dropout),
+                nn.Linear(self.config.mlp_hidden, 1),
+            )
+        else:
+            self.head = nn.Linear(lstm_output_size, 1)
 
     def forward(self, tokens: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
         """Forward pass through the model."""
         batch_size = tokens.shape[0]
+
+        # Optional token projection prior to LSTM
+        tokens = self.token_proj(tokens)
 
         # Pack sequences for LSTM efficiency
         packed = pack_padded_sequence(
@@ -563,30 +591,33 @@ class BiLSTMRegressor(nn.Module):
             # Use last hidden states from both directions (always bidirectional)
             representation = torch.cat([hidden[-2], hidden[-1]], dim=1)
 
-        # elif self.config.aggregation == "mean":
-        #     # Mean pooling over valid tokens
-        #     mask = torch.arange(lstm_output.shape[1], device=tokens.device).unsqueeze(
-        #         0
-        #     ).expand(batch_size, -1) < lengths.unsqueeze(1)
-        #     masked_output = lstm_output * mask.unsqueeze(-1)
-        #     representation = masked_output.sum(dim=1) / lengths.unsqueeze(-1).float()
-        #
-        # elif self.config.aggregation == "max":
-        #     # Max pooling over valid tokens
-        #     mask = torch.arange(lstm_output.shape[1], device=tokens.device).unsqueeze(
-        #         0
-        #     ).expand(batch_size, -1) < lengths.unsqueeze(1)
-        #     masked_output = lstm_output.masked_fill(~mask.unsqueeze(-1), float("-inf"))
-        #     representation = masked_output.max(dim=1)[0]
-        #
-        # elif self.config.aggregation == "attn":
-        #     # Attention-based aggregation
-        #     representation = self.aggregation(lstm_output, lengths)
+        elif self.config.aggregation == "mean":
+            # Mean pooling over valid tokens
+            mask = torch.arange(lstm_output.shape[1], device=tokens.device).unsqueeze(
+                0
+            ).expand(batch_size, -1) < lengths.unsqueeze(1)
+            masked_output = lstm_output * mask.unsqueeze(-1)
+            representation = masked_output.sum(dim=1) / lengths.unsqueeze(-1).float()
+
+        elif self.config.aggregation == "max":
+            # Max pooling over valid tokens
+            mask = torch.arange(lstm_output.shape[1], device=tokens.device).unsqueeze(
+                0
+            ).expand(batch_size, -1) < lengths.unsqueeze(1)
+            masked_output = lstm_output.masked_fill(~mask.unsqueeze(-1), float("-inf"))
+            representation = masked_output.max(dim=1)[0]
+
+        elif self.config.aggregation == "attn":
+            # Attention-based aggregation
+            representation = self.aggregation(lstm_output, lengths)
 
         else:
             raise ValueError(f"Unknown aggregation method: {self.config.aggregation}")
 
-        # Apply MLP head
+        # Optional pre-head normalization
+        representation = self.pre_head_norm(representation)
+
+        # Apply regression head
         predictions = self.head(representation).squeeze(-1)  # [batch_size]
 
         return predictions
@@ -627,7 +658,7 @@ class MetricsAccumulator:
         self, preds: torch.Tensor, targets: torch.Tensor, ids: list[str]
     ) -> None:
         """Update with batch predictions and targets."""
-        self.predictions.extend(preds.detach().cpu().numpy())
+        self.predictions.extend(preds.detach().cpu().float().numpy())
         self.targets.extend(targets.detach().cpu().numpy())
         self.ids.extend(ids)
 
@@ -671,22 +702,16 @@ class MetricsAccumulator:
         predictions_rounded = round_to_c1_levels(preds_clamped.tolist())
 
         # Cohen's Kappa
-        try:
-            kappa = sklearn.metrics.cohen_kappa_score(
-                true_labels_rounded, predictions_rounded
-            )
-        except Exception:
-            kappa = 0.0
+        kappa = sklearn.metrics.cohen_kappa_score(
+            true_labels_rounded, predictions_rounded
+        )
 
         # Quadratic Weighted Kappa
-        try:
-            qwk = quadratic_weighted_kappa(
-                true_labels_rounded,
-                predictions_rounded,
-                labels=[0, 40, 80, 120, 160, 200],
-            )
-        except Exception:
-            qwk = 0.0
+        qwk = quadratic_weighted_kappa(
+            true_labels_rounded,
+            predictions_rounded,
+            labels=[0, 40, 80, 120, 160, 200],
+        )
 
         # Pearson correlation
         try:
@@ -699,7 +724,7 @@ class MetricsAccumulator:
         return {
             "loss": float(mse),  # Use MAE as loss like the CLaRiCe paper
             "mae": float(mae),
-            "mse": float(mse),
+            # "mse": float(mse),
             "rmse": float(rmse),
             "r2": float(r2),
             "kappa": float(kappa),
@@ -791,21 +816,21 @@ def evaluate_model(
     return computed_metrics, predictions
 
 
-def create_synthetic_dataset(
-    n_samples: int = 256, min_len: int = 5, max_len: int = 200
-) -> EssayDataset:
-    """Create a synthetic dataset for testing."""
-    # Generate random embeddings and scores
-    arrays = []
-    scores = []
-    valid_scores = [0, 40, 80, 120, 160, 200]
-
-    for i in range(n_samples):
-        seq_len = np.random.randint(min_len, max_len + 1)
-        embedding = np.random.randn(seq_len, 768).astype(np.float32)
-        score = float(np.random.choice(valid_scores))
-
-        arrays.append(embedding)
-        scores.append(score)
-
-    return EssayDataset.from_memory(arrays, scores)
+# def create_synthetic_dataset(
+#     n_samples: int = 256, min_len: int = 5, max_len: int = 200
+# ) -> EssayDataset:
+#     """Create a synthetic dataset for testing."""
+#     # Generate random embeddings and scores
+#     arrays = []
+#     scores = []
+#     valid_scores = [0, 40, 80, 120, 160, 200]
+#
+#     for i in range(n_samples):
+#         seq_len = np.random.randint(min_len, max_len + 1)
+#         embedding = np.random.randn(seq_len, 768).astype(np.float32)
+#         score = float(np.random.choice(valid_scores))
+#
+#         arrays.append(embedding)
+#         scores.append(score)
+#
+#     return EssayDataset.from_memory(arrays, scores)

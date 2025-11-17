@@ -1,0 +1,39 @@
+Component 1 Training on Vectorized Essays with FocalLoss (Conv1D)
+==================================================
+
+Classification Specifications:
+- Loss: FocalLoss
+- Classes: 6 (0, 40, 80, 120, 160, 200)
+- Model: Conv1DClassifier
+- Conv filters: 28, 39
+- Dense neurons: 90
+- Optimizer: AdamW
+- Learning Rate: 7.06e-3
+- Dropout rate: 0.303
+- Weight Decay (L2): 6.61e-4
+
+Data Statistics:
+- Total essays: 6551
+- Training set: 4587
+- Validation set: 982
+- Test set: 982
+- Essay vector dimension: 768
+- C1 score range: 0-200
+
+Model Configuration:
+{'conv_filters': [28, 39], 'kernel_sizes': [3, 3], 'input_dim': 768, 'dropout': 0.303, 'dense_neurons': 90, 'pooling': 'max', 'output_range': (0, 200)}
+
+Training Configuration:
+{'epochs': 50, 'batch_size': 32, 'lr': 0.00706, 'weight_decay': 0.000661, 'optimizer': 'adamw', 'early_stopping_patience': 3, 'use_amp': True, 'amp_dtype': 'torch.bfloat16', 'target_scaler': 'none', 'seed': 42, 'device': 'auto', 'grad_clip_norm': 1.0}
+
+Best Validation Metrics:
+{'loss': 855.3971557617188, 'mae': 17.311609268188477, 'rmse': 29.247173309326172, 'r2': 0.12464481592178345, 'kappa': 0.30273220810343027, 'qwk': 0.37229858887414324, 'pearson_corr': 0.4142540395259857, 'step_accuracy': 0.6089613034623218, 'mae_step': 17.311608961303463, 'count': 982}
+
+Training History (last 10 epochs):
+  Epoch 1: Train Loss=0.075766, Val MAE=17.60, Val RMSE=29.33, Val Kappa=0.28, Val QWK=0.36, Val R²=0.12, Val Pearson=0.41, Val Step Acc=0.600, Time=54.1s
+  Epoch 2: Train Loss=0.067704, Val MAE=17.56, Val RMSE=29.52, Val Kappa=0.30, Val QWK=0.38, Val R²=0.11, Val Pearson=0.43, Val Step Acc=0.603, Time=19.4s
+  Epoch 3: Train Loss=0.061494, Val MAE=17.76, Val RMSE=29.50, Val Kappa=0.27, Val QWK=0.34, Val R²=0.11, Val Pearson=0.39, Val Step Acc=0.597, Time=19.1s
+  Epoch 4: Train Loss=0.061142, Val MAE=17.31, Val RMSE=29.25, Val Kappa=0.30, Val QWK=0.37, Val R²=0.12, Val Pearson=0.41, Val Step Acc=0.609, Time=19.3s
+  Epoch 5: Train Loss=0.056410, Val MAE=17.76, Val RMSE=29.61, Val Kappa=0.28, Val QWK=0.34, Val R²=0.10, Val Pearson=0.39, Val Step Acc=0.599, Time=19.4s
+  Epoch 6: Train Loss=0.055424, Val MAE=17.56, Val RMSE=29.63, Val Kappa=0.30, Val QWK=0.36, Val R²=0.10, Val Pearson=0.40, Val Step Acc=0.607, Time=19.6s
+  Epoch 7: Train Loss=0.053395, Val MAE=17.52, Val RMSE=29.61, Val Kappa=0.30, Val QWK=0.36, Val R²=0.10, Val Pearson=0.40, Val Step Acc=0.608, Time=19.4s

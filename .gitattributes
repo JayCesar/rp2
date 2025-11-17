@@ -1,1 +1,5 @@
 *.pth filter=lfs diff=lfs merge=lfs -text
+generated_datasets/extended_essay-br_preprocessed_for_BLSTM.json filter=lfs diff=lfs merge=lfs -text
+*.parquet filter=lfs diff=lfs merge=lfs -text
+generated_datasets/extended_essay-br_preprocessed_for_BLSTM_part1.parquet filter=lfs diff=lfs merge=lfs -text
+generated_datasets/extended_essay-br_preprocessed_for_BLSTM_part2.parquet filter=lfs diff=lfs merge=lfs -text

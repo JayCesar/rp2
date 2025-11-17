@@ -1,0 +1,14 @@
+{
+  "epochs": 50,
+  "batch_size": 32,
+  "lr": 0.00706,
+  "weight_decay": 0.000661,
+  "optimizer": "adamw",
+  "early_stopping_patience": 3,
+  "use_amp": true,
+  "amp_dtype": "torch.bfloat16",
+  "target_scaler": "none",
+  "seed": 42,
+  "device": "auto",
+  "grad_clip_norm": 1.0
+}
